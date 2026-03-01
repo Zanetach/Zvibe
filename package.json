@@ -1,0 +1,33 @@
+{
+  "name": "zvibe-kits",
+  "version": "1.0.0",
+  "description": "Zvibe - Ghostty multi-agent development workspace launcher",
+  "bin": {
+    "zvibe": "bin/zvibe"
+  },
+  "keywords": [
+    "ghostty",
+    "claude",
+    "codex",
+    "opencode",
+    "agent",
+    "developer-tools",
+    "cli"
+  ],
+  "author": "Zanetach",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Zanetach/zvibe-kits.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Zanetach/zvibe-kits/issues"
+  },
+  "homepage": "https://github.com/Zanetach/zvibe-kits#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin"
+  ]
+}
