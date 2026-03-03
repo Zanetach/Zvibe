@@ -119,6 +119,17 @@ cd zvibe-kits
 node src/cli.js --help
 ```
 
+发布前校验（防止“安装后不能用”）：
+
+```bash
+npm run verify:bin
+npm pack
+```
+
+说明：
+- `verify:bin` 会模拟 npm 全局安装时的 `bin` 符号链接场景并执行 `zvibe --help`
+- `npm pack` 会触发 `prepack`，若启动器路径解析有问题会直接失败
+
 ## 许可证
 
 MIT
