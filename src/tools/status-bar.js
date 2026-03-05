@@ -236,6 +236,15 @@ function visibleLength(text) {
   return String(text || '').replace(ANSI_RE, '').length;
 }
 
+function layoutTwoColumns(left, right, max) {
+  const sep = ' │ ';
+  const sepLen = visibleLength(sep);
+  const usable = Math.max(8, max - sepLen);
+  const leftBudget = Math.max(8, Math.floor(usable * 0.58));
+  const rightBudget = Math.max(8, usable - leftBudget);
+  return `${shorten(left, leftBudget)}${sep}${shorten(right, rightBudget)}`;
+}
+
 function segmentRatios(width) {
   if (width >= 220) return [0.42, 0.36, 0.22];
   if (width >= 170) return [0.45, 0.33, 0.22];
@@ -812,15 +821,21 @@ function render() {
 
   const gpuSource = dim(gpuState.source === 'powermetrics' ? 'pm' : 'io');
   const gpuModel = gpuState.model ? `${ICON_VALUE_GAP}${dim(shorten(gpuState.model, 10))}` : '';
+  const noAgent = noAgentTelemetryMode();
+  const leftGpuField = noAgent
+    ? `${ICONS.gpu}${ICON_VALUE_GAP}${gpuText}${ICON_VALUE_GAP}${gpuSource}`
+    : `${ICONS.gpu}${ICON_VALUE_GAP}${gpuText}${ICON_VALUE_GAP}${gpuSource}${gpuModel}`;
+  const leftNetField = noAgent
+    ? `${ICONS.net}${ICON_VALUE_GAP}↓ ${netInText}`
+    : `${ICONS.net}${ICON_VALUE_GAP}↓ ${netInText}${ICON_VALUE_GAP}↑ ${netOutText}`;
   const leftFields = [
     `${ICONS.cpu}${ICON_VALUE_GAP}${cpuText}${ICON_VALUE_GAP}${color(sparkline(cpuHistory), 120, 175, 255)}`,
-    `${ICONS.gpu}${ICON_VALUE_GAP}${gpuText}${ICON_VALUE_GAP}${gpuSource}${gpuModel}`,
+    leftGpuField,
     `${ICONS.mem}${ICON_VALUE_GAP}${memText}`,
-    `${ICONS.net}${ICON_VALUE_GAP}↓ ${netInText}${ICON_VALUE_GAP}↑ ${netOutText}`
+    leftNetField
   ];
   const left = leftFields.join(FIELD_GAP);
 
-  const noAgent = noAgentTelemetryMode();
   const modelLabel = `${ICONS.model}${ICON_VALUE_GAP}${color(shorten(usageState.model || '--', 16), 120, 175, 255)}${ICON_VALUE_GAP}SIG ${sigText}`;
   const tokenLabel = `${ICONS.tok}${ICON_VALUE_GAP}I ${tokInText}${ICON_VALUE_GAP}O ${tokOutText}${ICON_VALUE_GAP}T ${tokTotalText}${ICON_VALUE_GAP}TPS ${tpsInText}/${tpsOutText}/${tpsTotalText}`;
   const tokenLabelCompact = `${ICONS.tok}${ICON_VALUE_GAP}T ${tokTotalText}${ICON_VALUE_GAP}TPS ${tpsTotalText}`;
@@ -828,12 +843,13 @@ function render() {
   const ctxEtaLabel = `${ICONS.ctx}${ICON_VALUE_GAP}${ctxValue}${ICON_VALUE_GAP}ETA ${etaText}`;
   const middleFull = [modelLabel, tokenLabel, ctxCostLabel].join(FIELD_GAP);
   const middleCompact = [modelLabel, tokenLabelCompact, ctxEtaLabel].join(FIELD_GAP);
-  const middle = noAgent ? dim('terminal mode') : (max < 145 ? middleCompact : middleFull);
+  const middle = noAgent ? '' : (max < 145 ? middleCompact : middleFull);
 
   const quoteIdx = Math.floor(tick / 8) % FUN_QUOTES.length;
   const quoteText = FUN_QUOTES[quoteIdx];
-  const quoteColor = color(shorten(quoteText, 18), 255, 203, 107);
-  const weatherText = weatherState.text ? color(shorten(weatherState.text, 18), 110, 214, 250) : dim('--');
+  const quoteColor = color(shorten(quoteText, 16), 255, 203, 107);
+  const weatherText = weatherState.text ? color(shorten(weatherState.text, 16), 110, 214, 250) : dim('--');
+  const weatherCompactText = weatherState.text ? color(shorten(weatherState.text, 8), 110, 214, 250) : dim('--');
   const weatherIcon = weatherState.symbol || ICONS.weather;
   const hypeText = colorByPercent(activityScore, `${activityScore}%`);
   const pingText = pingState.ms == null ? dim('--') : colorByPing(pingState.ms, `${Math.round(pingState.ms)}ms`);
@@ -853,23 +869,26 @@ function render() {
     `LA${ICON_VALUE_GAP}${loadValue}`,
     `${ICONS.ping}${ICON_VALUE_GAP}${pingText}`,
     `${weatherIcon}${ICON_VALUE_GAP}${weatherText}`,
-    `${ICONS.hype}${ICON_VALUE_GAP}${hypeText}`,
+    ...(noAgent ? [`${ICONS.quote}${ICON_VALUE_GAP}${quoteColor}`] : [`${ICONS.hype}${ICON_VALUE_GAP}${hypeText}`]),
     SPINNER[spin]
   ];
   const rightMinimalFields = [
-    `⏱${ICON_VALUE_GAP}${formatUptimeCompact(uptime)}`,
-    `${weatherIcon}${ICON_VALUE_GAP}${weatherText}`,
+    `${weatherIcon}${ICON_VALUE_GAP}${weatherCompactText}`,
     `${ICONS.quote}${ICON_VALUE_GAP}${quoteColor}`,
+    `${ICONS.ping}${ICON_VALUE_GAP}${pingText}`,
     SPINNER[spin]
   ];
   const right = (max < 115 ? rightMinimalFields : (max < 145 ? rightCompactFields : rightFields)).join(FIELD_GAP);
 
   if (!process.stdout.isTTY) {
-    process.stdout.write(`${left} | ${middle} | ${right}\n`);
+    if (noAgent) process.stdout.write(`${left} | ${right}\n`);
+    else process.stdout.write(`${left} | ${middle} | ${right}\n`);
     return;
   }
 
-  const line = layoutThreeColumns(left, middle, right, max);
+  const line = noAgent
+    ? layoutTwoColumns(left, right, max)
+    : layoutThreeColumns(left, middle, right, max);
   process.stdout.write(`\x1b[2K\r${shorten(line, max)}`);
 }
 
