@@ -5,19 +5,17 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const TICK_MS = 1000;
-const RESCAN_EVERY = 30;
+const RESCAN_EVERY = 8;
 const SPINNER = ['|', '/', '-', '\\'];
 const CPU_BARS = '▁▂▃▄▅▆▇█';
-const TOKEN_FILE_INCLUDE = /(usage|token|conversation|session|history|transcript|log)/i;
-const TOKEN_FILE_EXCLUDE = /(failed_events|telemetry|analytics|crash|diagnostic)/i;
 
 let spin = 0;
 let tick = 0;
 let cpuHistory = [];
-let tokenSource = null;
 let prevCpu = readCpuSnapshot();
 let prevNet = readNetworkBytes();
 let prevAt = Date.now();
+let usageState = { model: null, input: null, output: null, total: null };
 
 function readCpuSnapshot() {
   const cpus = os.cpus();
@@ -53,8 +51,7 @@ function readNetworkBytes() {
     for (let i = 1; i < lines.length; i += 1) {
       const cols = lines[i].trim().split(/\s+/);
       if (cols.length <= Math.max(iBytesIdx, oBytesIdx)) continue;
-      const name = cols[0];
-      if (name === 'lo0') continue;
+      if (cols[0] === 'lo0') continue;
       const iBytes = Number(cols[iBytesIdx]);
       const oBytes = Number(cols[oBytesIdx]);
       if (Number.isFinite(iBytes)) total += iBytes;
@@ -89,58 +86,25 @@ function sparkline(values) {
   }).join('');
 }
 
-function latestMtime(filePath) {
+function shorten(text, max) {
+  if (!max || text.length <= max) return text;
+  if (max <= 1) return text.slice(0, max);
+  return `${text.slice(0, max - 1)}…`;
+}
+
+function findLatestFiles(pattern, limit = 8) {
+  const [base, ...rest] = pattern.split('/');
+  const root = base === '~' ? os.homedir() : base;
+  const fullPattern = path.join(root, ...rest);
   try {
-    return fs.statSync(filePath).mtimeMs;
+    const out = execSync(`ls -1t ${fullPattern} 2>/dev/null | head -n ${limit}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\n').map((x) => x.trim()).filter(Boolean);
   } catch {
-    return 0;
+    return [];
   }
 }
 
-function findLatestTokenFile(baseDir, depth = 0) {
-  if (depth > 3) return null;
-  let best = null;
-  let entries = [];
-  try {
-    entries = fs.readdirSync(baseDir, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-
-  for (const entry of entries) {
-    const full = path.join(baseDir, entry.name);
-    if (entry.isDirectory()) {
-      const child = findLatestTokenFile(full, depth + 1);
-      if (child && (!best || child.mtime > best.mtime)) best = child;
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    if (!/\.(jsonl|json|log|txt)$/i.test(entry.name)) continue;
-    if (TOKEN_FILE_EXCLUDE.test(entry.name)) continue;
-    if (!TOKEN_FILE_INCLUDE.test(entry.name)) continue;
-    const mtime = latestMtime(full);
-    if (!best || mtime > best.mtime) best = { file: full, mtime };
-  }
-  return best;
-}
-
-function detectTokenSource() {
-  const home = os.homedir();
-  const candidates = [
-    path.join(home, '.codex'),
-    path.join(home, '.claude'),
-    path.join(home, '.config', 'opencode')
-  ];
-  let best = null;
-  for (const base of candidates) {
-    const found = findLatestTokenFile(base);
-    if (!found) continue;
-    if (!best || found.mtime > best.mtime) best = found;
-  }
-  return best ? best.file : null;
-}
-
-function readTail(filePath, maxBytes = 200 * 1024) {
+function readTail(filePath, maxBytes = 220 * 1024) {
   try {
     const stat = fs.statSync(filePath);
     const start = Math.max(0, stat.size - maxBytes);
@@ -155,80 +119,187 @@ function readTail(filePath, maxBytes = 200 * 1024) {
   }
 }
 
-function findLastNumber(text, patterns) {
-  for (const pattern of patterns) {
-    let match;
-    let last = null;
-    while ((match = pattern.exec(text)) !== null) last = Number(match[1]);
-    if (Number.isFinite(last)) return last;
+function safeJSON(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+function extractCodexModelFromFile(file) {
+  const parseModel = (text) => {
+    const m = String(text || '').match(/"model"\s*:\s*"([^"]+)"/);
+    return m && m[1] ? m[1] : null;
+  };
+  try {
+    const escaped = file.replace(/(["\\$`])/g, '\\$1');
+    const codexOut = execSync(`rg -m 1 -o '\"model\":\"[^\"]*codex[^\"]*\"' \"${escaped}\"`, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    const codexModel = parseModel(codexOut);
+    if (codexModel) return codexModel;
+  } catch {}
+
+  try {
+    const escaped = file.replace(/(["\\$`])/g, '\\$1');
+    const out = execSync(`rg -m 1 -o '\"model\":\"[^\"]+\"' \"${escaped}\"`, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    return parseModel(out);
+  } catch {
+    return null;
+  }
+}
+
+function readCodexUsage() {
+  const files = findLatestFiles('~/.codex/sessions/*/*/*/*.jsonl', 6);
+  for (const file of files) {
+    const tail = readTail(file);
+    if (!tail) continue;
+
+    let model = null;
+    let usage = null;
+    const lines = tail.split('\n');
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const obj = safeJSON(lines[i]);
+      if (!obj) continue;
+
+      if (!model && obj.type === 'turn_context' && obj.payload && obj.payload.model) {
+        model = String(obj.payload.model);
+      }
+
+      if (!usage && obj.type === 'event_msg' && obj.payload && obj.payload.type === 'token_count') {
+        const total = obj.payload.info && obj.payload.info.total_token_usage;
+        if (total) {
+          usage = {
+            input: Number(total.input_tokens),
+            output: Number(total.output_tokens),
+            total: Number(total.total_tokens)
+          };
+        }
+      }
+
+      if (model && usage) break;
+    }
+
+    if (!model) model = extractCodexModelFromFile(file);
+
+    if (model || usage) {
+      return {
+        model,
+        input: usage && Number.isFinite(usage.input) ? usage.input : null,
+        output: usage && Number.isFinite(usage.output) ? usage.output : null,
+        total: usage && Number.isFinite(usage.total) ? usage.total : null
+      };
+    }
   }
   return null;
 }
 
-function findLastString(text, patterns) {
-  for (const pattern of patterns) {
-    let match;
-    let last = null;
-    while ((match = pattern.exec(text)) !== null) last = String(match[1]).trim();
-    if (last) return last;
+function parseClaudeMetadata(raw) {
+  if (!raw) return null;
+  try {
+    const normalized = raw.replace(/\\"/g, '"');
+    return JSON.parse(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function readClaudeUsage() {
+  const files = findLatestFiles('~/.claude/telemetry/*.json', 20);
+  for (const file of files) {
+    const tail = readTail(file, 320 * 1024);
+    if (!tail) continue;
+    const lines = tail.split('\n');
+
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const obj = safeJSON(lines[i]);
+      if (!obj || !obj.event_data) continue;
+      const event = obj.event_data;
+      if (event.event_name !== 'tengu_exit') continue;
+
+      const model = event.model ? String(event.model) : null;
+      const metadata = parseClaudeMetadata(event.additional_metadata);
+      const input = metadata && Number(metadata.last_session_total_input_tokens);
+      const output = metadata && Number(metadata.last_session_total_output_tokens);
+      const total = Number.isFinite(input) && Number.isFinite(output) ? input + output : null;
+
+      return {
+        model,
+        input: Number.isFinite(input) ? input : null,
+        output: Number.isFinite(output) ? output : null,
+        total
+      };
+    }
+  }
+
+  // Fallback: at least show latest model from telemetry
+  for (const file of files) {
+    const tail = readTail(file, 120 * 1024);
+    const match = tail.match(/"model"\s*:\s*"([^"]+)"/g);
+    if (!match || !match.length) continue;
+    const last = match[match.length - 1].match(/"model"\s*:\s*"([^"]+)"/);
+    if (last && last[1]) {
+      return { model: last[1], input: null, output: null, total: null };
+    }
+  }
+
+  return null;
+}
+
+function readOpencodeUsage() {
+  const files = findLatestFiles('~/.config/opencode/*.json*', 6);
+  for (const file of files) {
+    const tail = readTail(file, 150 * 1024);
+    if (!tail) continue;
+    const modelMatch = [...tail.matchAll(/"model"\s*:\s*"([^"]+)"/g)];
+    if (!modelMatch.length) continue;
+    const model = modelMatch[modelMatch.length - 1][1];
+    return { model, input: null, output: null, total: null };
   }
   return null;
 }
 
-function parseUsageData(text) {
-  if (!text) return { model: null, input: null, output: null, total: null };
+function preferredAgents() {
+  const fromEnv = [process.env.ZVIBE_PRIMARY_AGENT, process.env.ZVIBE_SECONDARY_AGENT]
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
+  const uniq = [];
+  fromEnv.forEach((x) => { if (!uniq.includes(x)) uniq.push(x); });
+  return uniq.length ? uniq : ['codex', 'claude', 'opencode'];
+}
 
-  const model = findLastString(text, [
-    /"model"\s*:\s*"([^"]+)"/g,
-    /"model_name"\s*:\s*"([^"]+)"/g,
-    /"model_slug"\s*:\s*"([^"]+)"/g,
-    /\bmodel\s*[=:]\s*["']?([a-zA-Z0-9._:-]+)["']?/gi
-  ]);
+function resolveUsage() {
+  const readers = {
+    codex: readCodexUsage,
+    claude: readClaudeUsage,
+    opencode: readOpencodeUsage
+  };
 
-  const input = findLastNumber(text, [
-    /"input_tokens"\s*:\s*(\d+)/g,
-    /"prompt_tokens"\s*:\s*(\d+)/g,
-    /"inputTokenCount"\s*:\s*(\d+)/g,
-    /\binput_tokens\s*[=:]\s*(\d+)/gi
-  ]);
-
-  const output = findLastNumber(text, [
-    /"output_tokens"\s*:\s*(\d+)/g,
-    /"completion_tokens"\s*:\s*(\d+)/g,
-    /"outputTokenCount"\s*:\s*(\d+)/g,
-    /\boutput_tokens\s*[=:]\s*(\d+)/gi
-  ]);
-
-  let total = findLastNumber(text, [
-    /"total_tokens"\s*:\s*(\d+)/g,
-    /"totalTokenCount"\s*:\s*(\d+)/g,
-    /\btotal_tokens\s*[=:]\s*(\d+)/gi
-  ]);
-  if (!Number.isFinite(total) && Number.isFinite(input) && Number.isFinite(output)) {
-    total = input + output;
+  for (const agent of preferredAgents()) {
+    const reader = readers[agent];
+    if (!reader) continue;
+    const usage = reader();
+    if (!usage) continue;
+    if (usage.model || usage.total != null || usage.input != null || usage.output != null) {
+      return usage;
+    }
   }
 
-  return { model, input, output, total };
-}
-
-function readUsageData() {
-  if (!tokenSource) return null;
-  const tail = readTail(tokenSource);
-  return parseUsageData(tail);
-}
-
-function shorten(text, max) {
-  if (!max || text.length <= max) return text;
-  if (max <= 1) return text.slice(0, max);
-  return `${text.slice(0, max - 1)}…`;
+  // ultimate fallback
+  return readCodexUsage() || readClaudeUsage() || readOpencodeUsage() || { model: null, input: null, output: null, total: null };
 }
 
 function render() {
   tick += 1;
   spin = (spin + 1) % SPINNER.length;
 
-  if (!tokenSource || tick % RESCAN_EVERY === 1) {
-    tokenSource = detectTokenSource();
+  if (tick % RESCAN_EVERY === 1) {
+    usageState = resolveUsage();
   }
 
   const now = Date.now();
@@ -243,11 +314,10 @@ function render() {
   const netNow = readNetworkBytes();
   const netRate = Math.max(0, (netNow - prevNet) / elapsed);
   prevNet = netNow;
-  const usage = readUsageData() || { model: null, input: null, output: null, total: null };
 
   const left = `CPU ${formatPercent(cpu)} ${sparkline(cpuHistory)}  MEM ${formatPercent(memUsed)}  NET ${formatRate(netRate)}`;
-  const modelLabel = `MODEL ${shorten(usage.model || '--', 26)}`;
-  const tokenLabel = `TOK I ${usage.input == null ? '--' : usage.input.toLocaleString()} O ${usage.output == null ? '--' : usage.output.toLocaleString()} T ${usage.total == null ? '--' : usage.total.toLocaleString()}`;
+  const modelLabel = `MODEL ${shorten(usageState.model || '--', 24)}`;
+  const tokenLabel = `TOK I ${usageState.input == null ? '--' : usageState.input.toLocaleString()} O ${usageState.output == null ? '--' : usageState.output.toLocaleString()} T ${usageState.total == null ? '--' : usageState.total.toLocaleString()}`;
   const right = `${modelLabel}  ${tokenLabel}  ${SPINNER[spin]}`;
   const line = `${left}  |  ${right}`;
 
@@ -270,5 +340,6 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
+usageState = resolveUsage();
 render();
 setInterval(render, TICK_MS);

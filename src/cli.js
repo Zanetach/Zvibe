@@ -90,9 +90,13 @@ function buildAgentCommand(agent, passthroughArgs = []) {
   return withAgentEnv(agent, base);
 }
 
-function buildStatusBarCommand() {
+function buildStatusBarCommand({ primaryAgent = '', secondaryAgent = '' } = {}) {
   const script = path.join(__dirname, 'tools', 'status-bar.js');
-  return `${shellQuoteArg(process.execPath)} ${shellQuoteArg(script)}`;
+  const env = [
+    `ZVIBE_PRIMARY_AGENT=${shellQuoteArg(primaryAgent || '')}`,
+    `ZVIBE_SECONDARY_AGENT=${shellQuoteArg(secondaryAgent || '')}`
+  ].join(' ');
+  return `${env} ${shellQuoteArg(process.execPath)} ${shellQuoteArg(script)}`;
 }
 
 async function ask(question, fallback) {
@@ -700,7 +704,10 @@ function cmdRun(positional, flags, output) {
     leftBottom: 'keifu',
     rightTop: primaryAgent,
     rightBottom: codeMode ? secondaryAgent : (config.rightTerminal ? 'true' : ''),
-    statusBar: buildStatusBarCommand()
+    statusBar: buildStatusBarCommand({
+      primaryAgent: codeMode ? config.agentPair[0] : mode,
+      secondaryAgent: codeMode ? config.agentPair[1] : ''
+    })
   };
   const sessionTag = codeMode
     ? `code-${config.agentPair[0]}-${config.agentPair[1]}-sb2`
