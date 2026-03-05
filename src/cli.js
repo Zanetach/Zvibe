@@ -184,7 +184,13 @@ function renderUsage() {
 }
 
 function renderBanner() {
-  return `zvibe\n\n`;
+  return ` _____   _ _     _           
+|__  / _| (_)___| |__   ___  
+  / / |_  | / __| '_ \\ / _ \\ 
+ / /|  _| | \\__ \\ | | |  __/ 
+/____|_| |_|_|___/_| |_|\\___| 
+
+                 zvibe\n\n`;
 }
 
 function commandSummary(summary, output) {
