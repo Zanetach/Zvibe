@@ -16,7 +16,7 @@ let prevCpu = readCpuSnapshot();
 let prevNet = readNetworkBytes();
 let prevAt = Date.now();
 let usageState = { model: null, input: null, output: null, total: null, context: null, cost: null };
-let gpuState = { model: null, util: 0, raw: null };
+let gpuState = { model: null, util: 0, raw: null, source: 'fallback' };
 
 function readCpuSnapshot() {
   const cpus = os.cpus();
@@ -276,15 +276,35 @@ function readOpencodeUsage() {
 }
 
 function readGpuInfo() {
-  // Best-effort on macOS without root: derive activity from ioreg AppUsage accumulatedGPUTime deltas.
-  // When unavailable, we still return model if possible.
+  // First try powermetrics with non-interactive sudo (works after setup grants NOPASSWD).
   try {
-    const sp = execSync('system_profiler SPDisplaysDataType 2>/dev/null', {
+    const out = execSync('sudo -n /usr/bin/powermetrics --samplers gpu_power -n 1 -i 1000 2>/dev/null', {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2500
     });
-    const m = sp.match(/Chipset Model:\\s*([^\\n]+)/);
-    if (m && m[1]) gpuState.model = m[1].trim();
+    const m = out.match(/GPU(?:\\s+HW)?\\s+active\\s+residency\\s*:\\s*([\\d.]+)%/i)
+      || out.match(/GPU\\s+active\\s*:\\s*([\\d.]+)%/i);
+    if (m && m[1]) {
+      const util = Number(m[1]);
+      if (Number.isFinite(util)) {
+        gpuState.util = Math.max(0, Math.min(100, Math.round(util)));
+        gpuState.source = 'powermetrics';
+      }
+    }
+  } catch {}
+
+  // Best-effort fallback on macOS without privileged metrics:
+  // derive activity from ioreg AppUsage accumulatedGPUTime deltas.
+  try {
+    if (!gpuState.model) {
+      const sp = execSync('system_profiler SPDisplaysDataType 2>/dev/null', {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      const m = sp.match(/Chipset Model:\\s*([^\\n]+)/);
+      if (m && m[1]) gpuState.model = m[1].trim();
+    }
   } catch {}
 
   try {
@@ -304,8 +324,11 @@ function readGpuInfo() {
     if (gpuState.raw != null) {
       const delta = Math.max(0, total - gpuState.raw);
       // Empirical normalization for Apple Silicon; keeps range mostly in 0-100 for interactive loads.
-      const util = Math.max(0, Math.min(100, Math.round((delta / 5e9) * 100)));
-      gpuState.util = util;
+      if (gpuState.source !== 'powermetrics') {
+        const util = Math.max(0, Math.min(100, Math.round((delta / 5e9) * 100)));
+        gpuState.util = util;
+        gpuState.source = 'fallback';
+      }
     }
     gpuState.raw = total;
   } catch {}

@@ -106,6 +106,15 @@ async function ask(question, fallback) {
   return (answer || fallback || '').trim();
 }
 
+async function askYesNo(question, fallback = true) {
+  const defaultText = fallback ? 'Y/n' : 'y/N';
+  const answer = (await ask(`${question} [${defaultText}]`, '')).toLowerCase();
+  if (!answer) return fallback;
+  if (['y', 'yes'].includes(answer)) return true;
+  if (['n', 'no'].includes(answer)) return false;
+  return fallback;
+}
+
 async function askAgentChoice(label, fallback, output) {
   if (!process.stdin.isTTY) {
     if (!output.json) output.ok(`${label} 已设置为 ${fallback}`);
@@ -319,6 +328,60 @@ prepend_keymap = [
   output.info('插件配置: keifu 使用默认配置（当前版本无需额外配置文件）');
 }
 
+async function setupGpuPowermetricsSudo(output) {
+  const powermetricsPath = '/usr/bin/powermetrics';
+  if (!fs.existsSync(powermetricsPath)) {
+    output.warn('未检测到 /usr/bin/powermetrics，已跳过 GPU 高精度监控授权');
+    return;
+  }
+
+  if (!process.stdin.isTTY) {
+    output.warn('检测到非交互终端，已跳过 GPU 高精度监控授权');
+    return;
+  }
+
+  const shouldEnable = await askYesNo('启用 GPU 高精度监控（需要一次系统密码）？', true);
+  if (!shouldEnable) {
+    output.info('已跳过 GPU 高精度监控授权');
+    return;
+  }
+
+  const user = process.env.SUDO_USER || process.env.USER || os.userInfo().username;
+  const sudoersFile = '/etc/sudoers.d/zvibe-powermetrics';
+  const tempFile = path.join(os.tmpdir(), `zvibe-powermetrics-${process.pid}-${Date.now()}.sudoers`);
+  const rule = `${user} ALL=(root) NOPASSWD: ${powermetricsPath}\n`;
+
+  fs.writeFileSync(tempFile, rule, { encoding: 'utf8', mode: 0o600 });
+  output.info('正在请求系统密码以写入 sudoers（仅授权 powermetrics）...');
+
+  try {
+    const installResult = run('sudo', ['install', '-m', '440', tempFile, sudoersFile], { capture: false });
+    if (!installResult.ok) {
+      output.warn('GPU 高精度监控授权失败：sudoers 写入未完成');
+      return;
+    }
+
+    const validateResult = run('sudo', ['visudo', '-cf', sudoersFile], { capture: true });
+    if (!validateResult.ok) {
+      output.warn(`GPU 高精度监控授权失败：sudoers 校验未通过 (${validateResult.stderr || validateResult.stdout})`);
+      run('sudo', ['rm', '-f', sudoersFile], { capture: false });
+      return;
+    }
+
+    const probeResult = run('sudo', ['-n', powermetricsPath, '--samplers', 'gpu_power', '-n', '1', '-i', '1000'], { capture: true });
+    if (!probeResult.ok) {
+      output.warn('授权已写入，但首次采样失败；可稍后重试 zvibe');
+    } else {
+      output.ok('GPU 高精度监控授权成功（powermetrics）');
+    }
+    output.info(`如需撤销：sudo rm -f ${sudoersFile}`);
+  } finally {
+    try {
+      fs.unlinkSync(tempFile);
+    } catch {}
+  }
+}
+
 async function cmdSetup(flags, output) {
   needMacOS();
   const autoInstall = true;
@@ -362,6 +425,7 @@ async function cmdSetup(flags, output) {
   }
 
   ensurePluginConfigs(output, { overwrite: overwritePluginConfigs });
+  await setupGpuPowermetricsSudo(output);
 
   if (!output.json) {
     process.stdout.write('\n== Step 2/2 设置 ==\n');
