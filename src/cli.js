@@ -90,6 +90,11 @@ function buildAgentCommand(agent, passthroughArgs = []) {
   return withAgentEnv(agent, base);
 }
 
+function buildStatusBarCommand() {
+  const script = path.join(__dirname, 'tools', 'status-bar.js');
+  return `${shellQuoteArg(process.execPath)} ${shellQuoteArg(script)}`;
+}
+
 async function ask(question, fallback) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const answer = await new Promise((resolve) => rl.question(`${question} `, resolve));
@@ -694,7 +699,8 @@ function cmdRun(positional, flags, output) {
     leftTop: 'yazi',
     leftBottom: 'keifu',
     rightTop: primaryAgent,
-    rightBottom: codeMode ? secondaryAgent : (config.rightTerminal ? 'true' : '')
+    rightBottom: codeMode ? secondaryAgent : (config.rightTerminal ? 'true' : ''),
+    statusBar: buildStatusBarCommand()
   };
   const sessionTag = codeMode
     ? `code-${config.agentPair[0]}-${config.agentPair[1]}`
