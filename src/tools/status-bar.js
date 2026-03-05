@@ -52,7 +52,7 @@ let usageState = { model: null, input: null, output: null, total: null, context:
 let gpuState = { model: null, util: 0, raw: null, source: 'fallback' };
 let prevTokenSnapshot = { input: null, output: null, total: null };
 let extraState = { load1: null, diskUsed: null, battery: null, charging: null };
-let weatherState = { text: null, symbol: null };
+let weatherState = { text: 'Weather loading', symbol: '☁️' };
 let pingState = { ms: null };
 let pingCursor = 0;
 
@@ -615,16 +615,16 @@ function readWeather() {
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 2500
     }).trim();
-    if (!out) return { text: null, symbol: null };
+    if (!out) return { text: 'Weather pending', symbol: '☁️' };
     const [locRaw, symbolRaw, condRaw, tempRaw] = out.split('|');
     const loc = String(locRaw || '').replace(/\s+/g, ' ').trim();
     const symbol = String(symbolRaw || '').replace(/\s+/g, '').trim();
     const cond = String(condRaw || '').replace(/\s+/g, ' ').trim();
     const temp = String(tempRaw || '').replace(/\s+/g, ' ').trim();
     const text = [loc, cond, temp].filter(Boolean).join(' ');
-    return { text: text || null, symbol: symbol || null };
+    return { text: text || 'Weather pending', symbol: symbol || '☁️' };
   } catch {
-    return { text: null, symbol: null };
+    return { text: weatherState.text || 'Weather unavailable', symbol: weatherState.symbol || '☁️' };
   }
 }
 
@@ -819,12 +819,8 @@ function render() {
     ? dim('--')
     : colorByPercent(100 - extraState.battery, `${battPct}${extraState.charging === true ? '⚡' : ''}`);
 
-  const gpuSource = dim(gpuState.source === 'powermetrics' ? 'pm' : 'io');
-  const gpuModel = gpuState.model ? `${ICON_VALUE_GAP}${dim(shorten(gpuState.model, 10))}` : '';
   const noAgent = noAgentTelemetryMode();
-  const leftGpuField = noAgent
-    ? `${ICONS.gpu}${ICON_VALUE_GAP}${gpuText}${ICON_VALUE_GAP}${gpuSource}`
-    : `${ICONS.gpu}${ICON_VALUE_GAP}${gpuText}${ICON_VALUE_GAP}${gpuSource}${gpuModel}`;
+  const leftGpuField = `${ICONS.gpu}${ICON_VALUE_GAP}${gpuText}`;
   const leftNetField = noAgent
     ? `${ICONS.net}${ICON_VALUE_GAP}↓ ${netInText}`
     : `${ICONS.net}${ICON_VALUE_GAP}↓ ${netInText}${ICON_VALUE_GAP}↑ ${netOutText}`;
@@ -848,9 +844,9 @@ function render() {
   const quoteIdx = Math.floor(tick / 8) % FUN_QUOTES.length;
   const quoteText = FUN_QUOTES[quoteIdx];
   const quoteColor = color(shorten(quoteText, 16), 255, 203, 107);
-  const weatherText = weatherState.text ? color(shorten(weatherState.text, 16), 110, 214, 250) : dim('--');
-  const weatherCompactText = weatherState.text ? color(shorten(weatherState.text, 8), 110, 214, 250) : dim('--');
-  const weatherIcon = weatherState.symbol || ICONS.weather;
+  const weatherText = color(shorten(weatherState.text || 'Weather pending', 16), 110, 214, 250);
+  const weatherCompactText = color(shorten(weatherState.text || 'Weather', 8), 110, 214, 250);
+  const weatherIcon = weatherState.symbol || '☁️';
   const hypeText = colorByPercent(activityScore, `${activityScore}%`);
   const pingText = pingState.ms == null ? dim('--') : colorByPing(pingState.ms, `${Math.round(pingState.ms)}ms`);
   const rightFields = [
