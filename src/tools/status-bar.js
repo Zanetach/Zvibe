@@ -5,9 +5,9 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const TICK_MS = 1000;
-const RESCAN_EVERY = 8;
-const PING_RESCAN_EVERY = 8;
-const SPINNER = ['|', '/', '-', '\\'];
+const RESCAN_EVERY = 3;
+const PING_RESCAN_EVERY = 3;
+const BOOTSTRAP_FAST_TICKS = 6;
 const CPU_BARS = '▁▂▃▄▅▆▇█';
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const RESET = '\x1b[0m';
@@ -24,29 +24,14 @@ const ICONS = {
   ctx: '󰆼',
   cost: '󰇭',
   weather: '󰖙',
-  hype: '󰐕',
   quote: '󰃧'
 };
-const FUN_QUOTES = [
-  '今天不卷，明天也强。',
-  '先跑起来，再变优雅。',
-  '这个 bug 很会藏，但我更会找。',
-  '写代码像做菜，火候最重要。',
-  '提交一小步，快乐一大步。',
-  '不怕慢，就怕没 commit。',
-  '别慌，先看日志。',
-  '写完就测，心里不怯。',
-  '修完这个，就去喝水。',
-  '稳住，我们能赢。'
-];
 
-let spin = 0;
 let tick = 0;
 let cpuHistory = [];
 let prevCpu = readCpuSnapshot();
 let prevNet = readNetworkBytes();
 let prevAt = Date.now();
-let activityHistory = [];
 let usageState = { model: null, input: null, output: null, total: null, context: null, cost: null };
 let gpuState = { model: null, util: 0, raw: null, source: 'fallback' };
 let prevTokenSnapshot = { input: null, output: null, total: null };
@@ -228,11 +213,11 @@ function layoutTwoColumns(left, right, max) {
 }
 
 function segmentRatios(width) {
-  if (width >= 220) return [0.42, 0.36, 0.22];
-  if (width >= 170) return [0.45, 0.33, 0.22];
-  if (width >= 140) return [0.48, 0.30, 0.22];
-  if (width >= 115) return [0.52, 0.26, 0.22];
-  return [0.56, 0.20, 0.24];
+  if (width >= 220) return [0.40, 0.34, 0.26];
+  if (width >= 170) return [0.43, 0.31, 0.26];
+  if (width >= 140) return [0.46, 0.28, 0.26];
+  if (width >= 115) return [0.50, 0.24, 0.26];
+  return [0.54, 0.20, 0.26];
 }
 
 function layoutThreeColumns(left, middle, right, max) {
@@ -247,7 +232,7 @@ function layoutThreeColumns(left, middle, right, max) {
 
   const minLeft = max >= 120 ? 28 : 20;
   const minMiddle = max >= 120 ? 18 : 10;
-  const minRight = max >= 120 ? 24 : 18;
+  const minRight = max >= 120 ? 30 : 20;
 
   if (bRight < minRight) {
     const need = minRight - bRight;
@@ -461,7 +446,7 @@ function readGpuInfo() {
     const out = execSync('sudo -n /usr/bin/powermetrics --samplers gpu_power -n 1 -i 1000 2>/dev/null', {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 2500
+      timeout: 1200
     });
     const m = out.match(/GPU(?:\s+HW)?\s+active\s+residency\s*:\s*([\d.]+)%/i)
       || out.match(/GPU\s+active\s*:\s*([\d.]+)%/i);
@@ -587,7 +572,7 @@ function pingOne(host) {
     const out = execSync(`ping -c 1 -W 1000 "${safeHost}" 2>/dev/null`, {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 1800
+      timeout: 900
     });
     const m = out.match(/time[=<]([\d.]+)\s*ms/i);
     if (!m || !m[1]) return { host, ms: null };
@@ -691,16 +676,7 @@ function resolveUsage() {
 
 function render() {
   tick += 1;
-  spin = (spin + 1) % SPINNER.length;
-
-  if (tick % RESCAN_EVERY === 1) {
-    usageState = resolveUsage();
-    gpuState = readGpuInfo();
-    extraState = readSystemExtras();
-  }
-  if (tick % PING_RESCAN_EVERY === 1) {
-    pingState = readPing();
-  }
+  const fastBoot = tick <= BOOTSTRAP_FAST_TICKS;
 
   const now = Date.now();
   const elapsed = Math.max(0.2, (now - prevAt) / 1000);
@@ -724,6 +700,7 @@ function render() {
   const memText = colorByPercent(memUsed, formatPercent(memUsed));
   const netInText = colorByRate(netInRate, formatRate(netInRate));
   const netOutText = colorByRate(netOutRate, formatRate(netOutRate));
+  const pingText = pingState.ms == null ? dim('--') : `${Math.round(pingState.ms)}ms`;
 
   const deltaIn = Number.isFinite(usageState.input) && Number.isFinite(prevTokenSnapshot.input)
     ? usageState.input - prevTokenSnapshot.input
@@ -737,11 +714,6 @@ function render() {
   const deltaInPerSec = Number.isFinite(deltaIn) ? Math.max(0, deltaIn / elapsed) : NaN;
   const deltaOutPerSec = Number.isFinite(deltaOut) ? Math.max(0, deltaOut / elapsed) : NaN;
   const deltaTotalPerSec = Number.isFinite(deltaTotal) ? Math.max(0, deltaTotal / elapsed) : NaN;
-  const tokenPulse = Math.max(0, Number.isFinite(deltaTotal) ? deltaTotal : 0);
-  const activityScore = Math.max(0, Math.min(100, Math.round((cpu * 0.5) + (gpuPct * 0.2) + Math.min(100, tokenPulse / 20))));
-  activityHistory.push(activityScore);
-  if (activityHistory.length > 18) activityHistory = activityHistory.slice(-18);
-
   if (Number.isFinite(usageState.input)) prevTokenSnapshot.input = usageState.input;
   if (Number.isFinite(usageState.output)) prevTokenSnapshot.output = usageState.output;
   if (Number.isFinite(usageState.total)) prevTokenSnapshot.total = usageState.total;
@@ -770,8 +742,8 @@ function render() {
   const noAgent = noAgentTelemetryMode();
   const leftGpuField = `${ICONS.gpu}${ICON_VALUE_GAP}${gpuText}`;
   const leftNetField = noAgent
-    ? `${ICONS.net}${ICON_VALUE_GAP}↓ ${netInText}`
-    : `${ICONS.net}${ICON_VALUE_GAP}↓ ${netInText}${ICON_VALUE_GAP}↑ ${netOutText}`;
+    ? `${ICONS.net}${ICON_VALUE_GAP}↓ ${netInText}${ICON_VALUE_GAP}${ICONS.ping}${ICON_VALUE_GAP}${pingText}`
+    : `${ICONS.net}${ICON_VALUE_GAP}↓ ${netInText}${ICON_VALUE_GAP}↑ ${netOutText}${ICON_VALUE_GAP}${ICONS.ping}${ICON_VALUE_GAP}${pingText}`;
   const leftFields = [
     `${ICONS.cpu}${ICON_VALUE_GAP}${cpuText}${ICON_VALUE_GAP}${color(sparkline(cpuHistory), 120, 175, 255)}`,
     leftGpuField,
@@ -789,11 +761,6 @@ function render() {
   const middleCompact = [modelLabel, tokenLabelCompact, ctxEtaLabel].join(FIELD_GAP);
   const middle = noAgent ? '' : (max < 145 ? middleCompact : middleFull);
 
-  const quoteIdx = Math.floor(tick / 8) % FUN_QUOTES.length;
-  const quoteText = FUN_QUOTES[quoteIdx];
-  const quoteColor = color(shorten(quoteText, 14), 255, 203, 107);
-  const hypeText = colorByPercent(activityScore, `${activityScore}%`);
-  const pingText = pingState.ms == null ? dim('--') : `${Math.round(pingState.ms)}ms`;
   const dateText = color(formatDateLite(new Date()), 174, 203, 255);
   const dateField = `🗓${ICON_VALUE_GAP}${dateText}`;
   const rightFields = [
@@ -801,22 +768,12 @@ function render() {
     `LA${ICON_VALUE_GAP}${loadValue}`,
     `💽${ICON_VALUE_GAP}${diskValue}`,
     `🔋${ICON_VALUE_GAP}${battText}`,
-    `${ICONS.ping}${ICON_VALUE_GAP}${pingText}`,
-    `${ICONS.hype}${ICON_VALUE_GAP}${hypeText}${ICON_VALUE_GAP}${color(sparkline(activityHistory), 255, 165, 80)}`,
-    `${ICONS.quote}${ICON_VALUE_GAP}${quoteColor}`,
-    SPINNER[spin],
     dateField
   ];
   const rightCompactFields = [
-    `${ICONS.ping}${ICON_VALUE_GAP}${pingText}`,
-    ...(noAgent ? [`${ICONS.quote}${ICON_VALUE_GAP}${quoteColor}`] : [`${ICONS.hype}${ICON_VALUE_GAP}${hypeText}`]),
-    SPINNER[spin],
     dateField
   ];
   const rightMinimalFields = [
-    `${ICONS.ping}${ICON_VALUE_GAP}${pingText}`,
-    `${ICONS.quote}${ICON_VALUE_GAP}${quoteColor}`,
-    SPINNER[spin],
     dateField
   ];
   const right = (max < 115 ? rightMinimalFields : (max < 145 ? rightCompactFields : rightFields)).join(FIELD_GAP);
@@ -832,15 +789,21 @@ function render() {
     const sep = ' │ ';
     const tail = `${sep}${dateField}`;
     const available = Math.max(20, max - visibleLength(tail));
-    const rightNoDate = (max < 115
-      ? [`${ICONS.ping}${ICON_VALUE_GAP}${pingText}`, `${ICONS.quote}${ICON_VALUE_GAP}${quoteColor}`, SPINNER[spin]]
-      : [`${ICONS.ping}${ICON_VALUE_GAP}${pingText}`, `${ICONS.quote}${ICON_VALUE_GAP}${quoteColor}`, SPINNER[spin]]
-    ).join(FIELD_GAP);
-    line = `${layoutTwoColumns(left, rightNoDate, available)}${tail}`;
+    line = `${shorten(left, available)}${tail}`;
   } else {
     line = layoutThreeColumns(left, middle, right, max);
   }
   process.stdout.write(`\x1b[2K\r${shorten(line, max)}`);
+
+  // Poll after painting so state appears immediately on startup.
+  if (fastBoot || tick % RESCAN_EVERY === 1) {
+    usageState = resolveUsage();
+    gpuState = readGpuInfo();
+    extraState = readSystemExtras();
+  }
+  if (fastBoot || tick % PING_RESCAN_EVERY === 1) {
+    pingState = readPing();
+  }
 }
 
 process.on('SIGINT', () => {
@@ -853,6 +816,5 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-usageState = resolveUsage();
 render();
 setInterval(render, TICK_MS);

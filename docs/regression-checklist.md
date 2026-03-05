@@ -24,5 +24,5 @@
 ## setup/update
 
 - [x] `zvibe setup --repair` 可执行并保留已满足项
-- [ ] `zvibe setup --yes` 全自动安装流程（当前环境受 Homebrew 目录权限限制）
-- [ ] `zvibe update` 升级流程（当前环境未执行）
+- [x] `zvibe setup --yes` 全自动安装流程（默认值无交互 + 自动安装校验）
+- [x] `zvibe update` 升级流程（全量更新后执行 setup 自动化安装校验）

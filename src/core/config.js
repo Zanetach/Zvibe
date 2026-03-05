@@ -17,6 +17,7 @@ function defaultConfig() {
   return {
     defaultAgent: 'codex',
     agentPair: ['opencode', 'codex'],
+    managedAgents: [],
     backend: 'zellij',
     fallback: true,
     rightTerminal: false,
@@ -81,6 +82,13 @@ function validate(config, { strict = true } = {}) {
     validateAgent(config.agentPair[1], 'agentPair[1]');
   }
 
+  if (config.managedAgents !== undefined) {
+    if (!Array.isArray(config.managedAgents)) {
+      throw new ZvibeError(ERRORS.CONFIG_INVALID, 'managedAgents 必须是数组');
+    }
+    config.managedAgents.forEach((agent, idx) => validateAgent(agent, `managedAgents[${idx}]`));
+  }
+
   if (config.backend !== undefined) validateBackend(normalizeBackend(config.backend));
 
   if (config.fallback !== undefined && typeof config.fallback !== 'boolean') {
@@ -125,6 +133,7 @@ function loadConfig({ strict = true } = {}) {
   const normalized = {
     defaultAgent: data.defaultAgent,
     agentPair: data.agentPair || data.AgentMode || defaultConfig().agentPair,
+    managedAgents: Array.isArray(data.managedAgents) ? data.managedAgents : defaultConfig().managedAgents,
     backend: normalizeBackend(data.backend),
     fallback: data.fallback !== undefined ? data.fallback : true,
     rightTerminal: data.rightTerminal !== undefined ? data.rightTerminal : false,
@@ -149,6 +158,7 @@ function mergeWithPriority(cli, config) {
     defaultAgent: cli.defaultAgent || config.defaultAgent,
     agentPair: cli.agentPair || config.agentPair,
     backend: normalizeBackend(cli.backend || config.backend),
+    managedAgents: Array.isArray(config.managedAgents) ? config.managedAgents : [],
     fallback: cli.fallback !== undefined ? cli.fallback : config.fallback,
     rightTerminal: cli.rightTerminal !== undefined ? cli.rightTerminal : config.rightTerminal,
     autoGitInit: cli.autoGitInit !== undefined ? cli.autoGitInit : config.autoGitInit,

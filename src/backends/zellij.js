@@ -37,13 +37,13 @@ function paneKdl(targetDir, command, paneName, size = null) {
   const shell = process.env.SHELL || '/bin/zsh';
   const cmd = shellWrap(targetDir, command);
   const sizeAttr = size ? ` size="${escapeKdl(size)}"` : '';
-  return `pane name="${escapeKdl(paneName)}"${sizeAttr} command="${escapeKdl(shell)}" {\n        args "-lc" "${escapeKdl(cmd)}"\n      }`;
+  return `pane name="${escapeKdl(paneName)}"${sizeAttr} borderless=true command="${escapeKdl(shell)}" {\n        args "-lc" "${escapeKdl(cmd)}"\n      }`;
 }
 
 function buildLayout(targetDir, commands) {
   const panePrefix = 'zvibe';
   const minimalTerminal = !!commands.minimalTerminal;
-  const statusBar = paneKdl(targetDir, commands.statusBar || 'true', `${panePrefix}:monitor`, '3');
+  const statusBar = paneKdl(targetDir, commands.statusBar || 'true', `${panePrefix}:state`, '3');
   const rightTopRole = commands.rightTopRole || 'agent';
   const rightTop = paneKdl(targetDir, commands.rightTop, `${panePrefix}:${rightTopRole}`);
 
@@ -80,11 +80,12 @@ function mustRun(command, args, hint, options = {}) {
 }
 
 function applyPaneFrames() {
-  run('zellij', ['options', '--pane-frames', 'true'], { capture: true });
+  run('zellij', ['options', '--pane-frames', 'false'], { capture: true });
 }
 
 function launch({ targetDir, commands, freshSession = false, sessionTag = '' }) {
   preflight();
+  applyPaneFrames();
   const name = `zvibe-${sessionName(targetDir, sessionTag)}`;
   const layoutFile = writeLayout(targetDir, commands);
 
@@ -98,7 +99,6 @@ function launch({ targetDir, commands, freshSession = false, sessionTag = '' }) 
       // Some zellij setups keep focus on current tab after creating a new tab.
       // Move focus to make the new zvibe tab immediately visible.
       run('zellij', ['action', 'go-to-next-tab'], { capture: true });
-      applyPaneFrames();
       return;
     }
 

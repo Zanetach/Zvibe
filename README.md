@@ -9,7 +9,7 @@ Zvibe 是一个基于 zellij 的会话优先终端工作台启动器。
 - 双 Agent 模式：`zvibe code`
 - Terminal-only mode: `zvibe terminal` or `zvibe -t`
 - Session management: list / attach / kill
-- Live bottom monitor bar: CPU / GPU / MEM / NET / MODEL / TOK / CTX / COST
+- Live bottom state bar: CPU / GPU / MEM / NET / MODEL / TOK / CTX / COST
 - Config and ops commands: `setup` / `config` / `status` / `update`
 
 ## Install / 安装
@@ -68,6 +68,7 @@ zvibe <agent> -- <agent args...>
 zvibe setup
 zvibe setup --repair
 zvibe setup --no-repair
+zvibe setup --yes
 ```
 
 ### Config / 配置
@@ -101,6 +102,7 @@ zvibe session -k <name>
 - `--reuse-session`: compatibility flag (attach-first is default) / 兼容参数
 - `-p, --passthrough`: pass remaining args to agent / 透传参数给 agent
 - `-t, --terminal`: terminal-only when standalone, or right terminal pane in explicit agent mode
+- `--yes`: non-interactive setup with defaults / setup 无交互默认值执行
 - `--json`: JSON output
 - `--verbose`: verbose diagnostics
 
@@ -141,6 +143,7 @@ Expect / 预期:
 
 ```bash
 zvibe setup --repair
+zvibe setup --yes
 zvibe config validate
 zvibe config explain
 zvibe config get defaultAgent
@@ -158,7 +161,7 @@ zvibe -t --fresh-session
 ```
 
 Expect / 预期:
-- `terminal` or standalone `-t`: one clean terminal pane + bottom monitor only
+- `terminal` or standalone `-t`: one clean terminal pane + bottom state only
 - `codex|claude|opencode`: normal agent workspace layout
 - `code`: dual-agent layout
 
@@ -173,7 +176,7 @@ zvibe session kill <name>
 ### 5) Monitor bar / 监控栏
 
 Expect / 预期:
-- Bottom monitor updates live
+- Bottom state updates live
 - Metrics include CPU/GPU/MEM/NET in/out + model/token/context/cost (if source available)
 - Colors change by threshold and trend
 
@@ -183,6 +186,12 @@ Expect / 预期:
 npm run verify:bin
 npm pack
 ```
+
+`zvibe update` now performs a full update and verifies setup automation coverage:
+- brew update/upgrade/cleanup
+- required formulas/casks/tools auto-install checks
+- plugin config regeneration
+- missing-item validation for setup dependencies
 
 ## Development / 开发
 
