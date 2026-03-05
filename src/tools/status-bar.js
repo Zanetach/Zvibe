@@ -6,7 +6,6 @@ const { execSync } = require('child_process');
 
 const TICK_MS = 1000;
 const RESCAN_EVERY = 8;
-const WEATHER_RESCAN_EVERY = 15;
 const PING_RESCAN_EVERY = 8;
 const SPINNER = ['|', '/', '-', '\\'];
 const CPU_BARS = '▁▂▃▄▅▆▇█';
@@ -52,8 +51,6 @@ let usageState = { model: null, input: null, output: null, total: null, context:
 let gpuState = { model: null, util: 0, raw: null, source: 'fallback' };
 let prevTokenSnapshot = { input: null, output: null, total: null };
 let extraState = { load1: null, diskUsed: null, battery: null, charging: null };
-const weatherCacheFile = path.join(os.homedir(), '.cache', 'zvibe', 'weather.json');
-let weatherState = loadWeatherCache() || { text: '天气获取中', symbol: '☁️' };
 let pingState = { ms: null };
 let pingCursor = 0;
 
@@ -591,180 +588,6 @@ function readSystemExtras() {
   return extras;
 }
 
-function readWeather() {
-  const safeCurl = (url, timeoutMs = 2600) => {
-    const safeUrl = String(url || '').replace(/(["\\$`])/g, '\\$1');
-    try {
-      return execSync(`curl -q --noproxy '*' -fsS --max-time 2 "${safeUrl}"`, {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: timeoutMs
-      }).trim();
-    } catch {
-      return '';
-    }
-  };
-
-  const weatherCodeToText = (code) => {
-    const c = Number(code);
-    if (c === 0) return { text: '晴', symbol: '☀️' };
-    if ([1, 2].includes(c)) return { text: '晴转多云', symbol: '🌤️' };
-    if (c === 3) return { text: '多云', symbol: '☁️' };
-    if ([45, 48].includes(c)) return { text: '雾', symbol: '🌫️' };
-    if ([51, 53, 55, 56, 57].includes(c)) return { text: '毛毛雨', symbol: '🌦️' };
-    if ([61, 63, 65, 66, 67, 80, 81, 82].includes(c)) return { text: '雨', symbol: '🌧️' };
-    if ([71, 73, 75, 77, 85, 86].includes(c)) return { text: '雪', symbol: '🌨️' };
-    if ([95, 96, 99].includes(c)) return { text: '雷雨', symbol: '⛈️' };
-    return { text: '多云', symbol: '☁️' };
-  };
-
-  const requestOpenMeteo = (lat, lon) => {
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&timezone=auto`;
-    const raw = safeCurl(url);
-    if (!raw) return null;
-    try {
-      const obj = JSON.parse(raw);
-      const current = obj.current_weather || obj.current || null;
-      if (!current) return null;
-      const code = Number(current.weathercode != null ? current.weathercode : current.weather_code);
-      const temp = Number(current.temperature != null ? current.temperature : current.temperature_2m);
-      const mapped = weatherCodeToText(code);
-      const tempText = Number.isFinite(temp) ? `${Math.round(temp)}°C` : '';
-      const text = [mapped.text, tempText].filter(Boolean).join(' ');
-      if (!text) return null;
-      return { text, symbol: mapped.symbol };
-    } catch {
-      return null;
-    }
-  };
-
-  const geocodeByNameOpenMeteo = (name) => {
-    const q = String(name || '').trim();
-    if (!q) return null;
-    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=zh&format=json`;
-    const raw = safeCurl(url);
-    if (!raw) return null;
-    try {
-      const obj = JSON.parse(raw);
-      const item = Array.isArray(obj.results) && obj.results.length ? obj.results[0] : null;
-      if (!item) return null;
-      return {
-        lat: Number(item.latitude),
-        lon: Number(item.longitude),
-        name: String(item.name || q).trim()
-      };
-    } catch {
-      return null;
-    }
-  };
-
-  const requestWttr = (query = '') => {
-    const target = query
-      ? `https://wttr.in/${query}?format=%l|%c|%C|%t&lang=zh-cn`
-      : 'https://wttr.in/?format=%l|%c|%C|%t&lang=zh-cn';
-    const out = safeCurl(target);
-    try {
-      if (!out || !out.includes('|')) return null;
-      const [locRaw, symbolRaw, condRaw, tempRaw] = out.split('|');
-      const loc = String(locRaw || '').replace(/\s+/g, ' ').trim();
-      const symbol = String(symbolRaw || '').replace(/\s+/g, '').trim() || '☁️';
-      const cond = String(condRaw || '').replace(/\s+/g, ' ').trim();
-      const temp = String(tempRaw || '').replace(/\s+/g, ' ').trim();
-      const normalizeCond = (value) => String(value || '')
-        .replace(/partly cloudy/ig, '晴转多云')
-        .replace(/cloudy/ig, '多云')
-        .replace(/overcast/ig, '阴')
-        .replace(/sunny|clear/ig, '晴')
-        .replace(/rain/ig, '雨')
-        .replace(/snow/ig, '雪')
-        .trim();
-      const condZh = normalizeCond(cond);
-      const text = [condZh || cond || loc, temp].filter(Boolean).join(' ');
-      if (!text) return null;
-      return { text, symbol };
-    } catch {
-      return null;
-    }
-  };
-
-  const getIpGeo = () => {
-    try {
-      const out = execSync("curl -q --noproxy '*' -fsS --max-time 2 https://ipapi.co/json", {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 2500
-      });
-      const data = JSON.parse(out);
-      return {
-        city: String(data.city || '').trim(),
-        lat: Number(data.latitude),
-        lon: Number(data.longitude)
-      };
-    } catch {
-      return { city: '', lat: NaN, lon: NaN };
-    }
-  };
-
-  const gps = readGpsCoordinates();
-  const ipGeo = getIpGeo();
-  const location = String(process.env.ZVIBE_WEATHER_LOCATION || '').trim();
-
-  const coordCandidates = [];
-  if (location) {
-    const geo = geocodeByNameOpenMeteo(location);
-    if (geo) coordCandidates.push({ lat: geo.lat, lon: geo.lon });
-  }
-  if (gps && Number.isFinite(gps.lat) && Number.isFinite(gps.lon)) coordCandidates.push({ lat: gps.lat, lon: gps.lon });
-  if (Number.isFinite(ipGeo.lat) && Number.isFinite(ipGeo.lon)) coordCandidates.push({ lat: ipGeo.lat, lon: ipGeo.lon });
-
-  for (const c of coordCandidates) {
-    const weather = requestOpenMeteo(c.lat, c.lon);
-    if (weather) {
-      saveWeatherCache(weather);
-      return weather;
-    }
-  }
-
-  const wttrCandidates = [];
-  if (location) wttrCandidates.push(encodeURIComponent(location));
-  if (gps && Number.isFinite(gps.lat) && Number.isFinite(gps.lon)) wttrCandidates.push(`${gps.lat},${gps.lon}`);
-  if (ipGeo.city) wttrCandidates.push(encodeURIComponent(ipGeo.city));
-  if (Number.isFinite(ipGeo.lat) && Number.isFinite(ipGeo.lon)) wttrCandidates.push(`${ipGeo.lat},${ipGeo.lon}`);
-  wttrCandidates.push('');
-
-  for (const candidate of wttrCandidates) {
-    const weather = requestWttr(candidate);
-    if (weather) {
-      saveWeatherCache(weather);
-      return weather;
-    }
-  }
-  return null;
-}
-
-function loadWeatherCache() {
-  try {
-    const raw = fs.readFileSync(weatherCacheFile, 'utf8');
-    const obj = JSON.parse(raw);
-    if (!obj || typeof obj !== 'object') return null;
-    const text = String(obj.text || '').trim();
-    const symbol = String(obj.symbol || '').trim() || '☁️';
-    if (!text) return null;
-    return { text, symbol };
-  } catch {
-    return null;
-  }
-}
-
-function saveWeatherCache(state) {
-  try {
-    if (!state || !state.text) return;
-    fs.mkdirSync(path.dirname(weatherCacheFile), { recursive: true });
-    fs.writeFileSync(weatherCacheFile, `${JSON.stringify(state)}\n`, 'utf8');
-  } catch {}
-}
-
 function pingOne(host) {
   const safeHost = String(host || '').trim().replace(/(["\\$`])/g, '\\$1');
   if (!safeHost) return null;
@@ -883,10 +706,6 @@ function render() {
     gpuState = readGpuInfo();
     extraState = readSystemExtras();
   }
-  if (tick % WEATHER_RESCAN_EVERY === 1) {
-    const nextWeather = readWeather();
-    if (nextWeather && nextWeather.text) weatherState = nextWeather;
-  }
   if (tick % PING_RESCAN_EVERY === 1) {
     pingState = readPing();
   }
@@ -992,9 +811,6 @@ function render() {
   const quoteIdx = Math.floor(tick / 8) % FUN_QUOTES.length;
   const quoteText = FUN_QUOTES[quoteIdx];
   const quoteColor = color(shorten(quoteText, 16), 255, 203, 107);
-  const weatherText = color(shorten(weatherState.text || '天气获取中', 16), 110, 214, 250);
-  const weatherCompactText = color(shorten(weatherState.text || '天气', 8), 110, 214, 250);
-  const weatherIcon = weatherState.symbol || '☁️';
   const hypeText = colorByPercent(activityScore, `${activityScore}%`);
   const pingText = pingState.ms == null ? dim('--') : `${Math.round(pingState.ms)}ms`;
   const dateText = color(formatDateLite(new Date()), 174, 203, 255);
@@ -1005,7 +821,6 @@ function render() {
     `💽${ICON_VALUE_GAP}${diskValue}`,
     `🔋${ICON_VALUE_GAP}${battText}`,
     `${ICONS.ping}${ICON_VALUE_GAP}${pingText}`,
-    `${weatherIcon}${ICON_VALUE_GAP}${weatherText}`,
     `${ICONS.hype}${ICON_VALUE_GAP}${hypeText}${ICON_VALUE_GAP}${color(sparkline(activityHistory), 255, 165, 80)}`,
     `${ICONS.quote}${ICON_VALUE_GAP}${quoteColor}`,
     SPINNER[spin]
@@ -1013,13 +828,11 @@ function render() {
   const rightCompactFields = [
     `🗓${ICON_VALUE_GAP}${dateText}`,
     `${ICONS.ping}${ICON_VALUE_GAP}${pingText}`,
-    `${weatherIcon}${ICON_VALUE_GAP}${weatherText}`,
     ...(noAgent ? [`${ICONS.quote}${ICON_VALUE_GAP}${quoteColor}`] : [`${ICONS.hype}${ICON_VALUE_GAP}${hypeText}`]),
     SPINNER[spin]
   ];
   const rightMinimalFields = [
     `🗓${ICON_VALUE_GAP}${color(formatDateLite(new Date()), 174, 203, 255)}`,
-    `${weatherIcon}${ICON_VALUE_GAP}${weatherCompactText}`,
     `${ICONS.quote}${ICON_VALUE_GAP}${quoteColor}`,
     `${ICONS.ping}${ICON_VALUE_GAP}${pingText}`,
     SPINNER[spin]
