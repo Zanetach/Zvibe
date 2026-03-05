@@ -16,7 +16,7 @@ let prevCpu = readCpuSnapshot();
 let prevNet = readNetworkBytes();
 let prevAt = Date.now();
 let usageState = { model: null, input: null, output: null, total: null, context: null, cost: null };
-let gpuState = { model: null, util: null, raw: null };
+let gpuState = { model: null, util: 0, raw: null };
 
 function readCpuSnapshot() {
   const cpus = os.cpus();
@@ -294,7 +294,10 @@ function readGpuInfo() {
       maxBuffer: 8 * 1024 * 1024
     });
     const matches = [...raw.matchAll(/"accumulatedGPUTime"\\s*=\\s*(\\d+)/g)];
-    if (!matches.length) return gpuState;
+    if (!matches.length) {
+      if (gpuState.util == null) gpuState.util = 0;
+      return gpuState;
+    }
     let total = 0;
     matches.forEach((x) => { total += Number(x[1]) || 0; });
 
@@ -365,7 +368,7 @@ function render() {
   const netOutRate = Math.max(0, (netNow.outBytes - prevNet.outBytes) / elapsed);
   prevNet = netNow;
 
-  const gpuLabel = `GPU ${gpuState.util == null ? '--' : `${gpuState.util}%`} ${shorten(gpuState.model || '', 10)}`.trim();
+  const gpuLabel = `GPU ${gpuState.util == null ? '0%' : `${gpuState.util}%`} ${shorten(gpuState.model || '', 10)}`.trim();
   const left = `CPU ${formatPercent(cpu)} ${sparkline(cpuHistory)}  ${gpuLabel}  MEM ${formatPercent(memUsed)}  NET IN ${formatRate(netInRate)} OUT ${formatRate(netOutRate)}`;
   const modelLabel = `MODEL ${shorten(usageState.model || '--', 20)}`;
   const tokenLabel = `TOK I ${usageState.input == null ? '--' : usageState.input.toLocaleString()} O ${usageState.output == null ? '--' : usageState.output.toLocaleString()} T ${usageState.total == null ? '--' : usageState.total.toLocaleString()}`;
