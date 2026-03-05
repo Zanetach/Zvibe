@@ -104,14 +104,6 @@ function colorByCost(value, text) {
   return color(text, 229, 78, 78);
 }
 
-function colorBySig(level, text) {
-  if (level === 'CRIT') return color(text, 229, 78, 78);
-  if (level === 'WARN') return color(text, 236, 138, 69);
-  if (level === 'LIVE') return color(text, 91, 179, 255);
-  if (level === 'IDLE') return dim(text);
-  return dim(text);
-}
-
 function readCpuSnapshot() {
   const cpus = os.cpus();
   let idle = 0;
@@ -768,17 +760,6 @@ function render() {
   const etaText = (Number.isFinite(ctxRemaining) && Number.isFinite(deltaTotalPerSec) && deltaTotalPerSec > 0)
     ? color(formatEtaCompact(ctxRemaining / deltaTotalPerSec), 196, 160, 255)
     : dim('--');
-  const sigLevel = (() => {
-    if (!usageState.model) return '--';
-    if (Number.isFinite(usageState.context) && Number.isFinite(usageState.total)) {
-      const ctxPct = usageState.total / Math.max(1, usageState.context);
-      if (ctxPct >= 0.9) return 'CRIT';
-      if (ctxPct >= 0.75) return 'WARN';
-    }
-    if (Number.isFinite(deltaTotal) && deltaTotal > 0) return 'LIVE';
-    return 'IDLE';
-  })();
-  const sigText = colorBySig(sigLevel, sigLevel);
   const loadValue = extraState.load1 == null ? dim('--') : colorByPercent(Math.min(100, (extraState.load1 / Math.max(1, os.cpus().length)) * 100), extraState.load1.toFixed(2));
   const diskValue = extraState.diskUsed == null ? dim('--') : colorByPercent(extraState.diskUsed, `${extraState.diskUsed}%`);
   const battPct = extraState.battery == null ? '--' : `${extraState.battery}%`;
@@ -799,7 +780,7 @@ function render() {
   ];
   const left = leftFields.join(FIELD_GAP);
 
-  const modelLabel = `${ICONS.model}${ICON_VALUE_GAP}${color(shorten(usageState.model || '--', 16), 120, 175, 255)}${ICON_VALUE_GAP}SIG ${sigText}`;
+  const modelLabel = `${ICONS.model}${ICON_VALUE_GAP}${color(shorten(usageState.model || '--', 16), 120, 175, 255)}`;
   const tokenLabel = `${ICONS.tok}${ICON_VALUE_GAP}I ${tokInText}${ICON_VALUE_GAP}O ${tokOutText}${ICON_VALUE_GAP}T ${tokTotalText}${ICON_VALUE_GAP}TPS ${tpsInText}/${tpsOutText}/${tpsTotalText}`;
   const tokenLabelCompact = `${ICONS.tok}${ICON_VALUE_GAP}T ${tokTotalText}${ICON_VALUE_GAP}TPS ${tpsTotalText}`;
   const ctxCostLabel = `${ICONS.ctx}${ICON_VALUE_GAP}${ctxValue}${ICON_VALUE_GAP}ETA ${etaText}${FIELD_GAP}${ICONS.cost}${ICON_VALUE_GAP}${costValue}`;
