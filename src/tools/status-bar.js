@@ -8,6 +8,8 @@ const TICK_MS = 1000;
 const RESCAN_EVERY = 8;
 const SPINNER = ['|', '/', '-', '\\'];
 const CPU_BARS = '▁▂▃▄▅▆▇█';
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const RESET = '\x1b[0m';
 
 let spin = 0;
 let tick = 0;
@@ -17,6 +19,49 @@ let prevNet = readNetworkBytes();
 let prevAt = Date.now();
 let usageState = { model: null, input: null, output: null, total: null, context: null, cost: null };
 let gpuState = { model: null, util: 0, raw: null, source: 'fallback' };
+let prevTokenSnapshot = { input: null, output: null, total: null };
+
+function supportsColor() {
+  return process.stdout.isTTY && !process.env.NO_COLOR;
+}
+
+function color(text, r, g, b) {
+  if (!supportsColor()) return text;
+  return `\x1b[38;2;${r};${g};${b}m${text}${RESET}`;
+}
+
+function dim(text) {
+  return color(text, 130, 137, 150);
+}
+
+function colorByPercent(value, text) {
+  if (!Number.isFinite(value)) return dim(text);
+  if (value < 40) return color(text, 97, 191, 103);
+  if (value < 70) return color(text, 230, 190, 64);
+  if (value < 90) return color(text, 236, 138, 69);
+  return color(text, 229, 78, 78);
+}
+
+function colorByRate(value, text) {
+  if (!Number.isFinite(value)) return dim(text);
+  if (value < 128 * 1024) return color(text, 97, 191, 103);
+  if (value < 2 * 1024 * 1024) return color(text, 230, 190, 64);
+  if (value < 10 * 1024 * 1024) return color(text, 236, 138, 69);
+  return color(text, 229, 78, 78);
+}
+
+function colorByTokenDelta(delta, text) {
+  if (!Number.isFinite(delta)) return dim(text);
+  if (delta > 0) return color(text, 91, 179, 255);
+  return dim(text);
+}
+
+function colorByCost(value, text) {
+  if (!Number.isFinite(value)) return dim(text);
+  if (value < 0.2) return color(text, 97, 191, 103);
+  if (value < 1) return color(text, 230, 190, 64);
+  return color(text, 229, 78, 78);
+}
 
 function readCpuSnapshot() {
   const cpus = os.cpus();
@@ -89,9 +134,27 @@ function sparkline(values) {
 }
 
 function shorten(text, max) {
-  if (!max || text.length <= max) return text;
-  if (max <= 1) return text.slice(0, max);
-  return `${text.slice(0, max - 1)}…`;
+  const plain = String(text || '').replace(ANSI_RE, '');
+  if (!max || plain.length <= max) return text;
+  if (max <= 1) return plain.slice(0, max);
+
+  let out = '';
+  let visible = 0;
+  let i = 0;
+  while (i < text.length && visible < max - 1) {
+    if (text[i] === '\x1b') {
+      const m = text.slice(i).match(/^\x1b\[[0-9;]*m/);
+      if (m) {
+        out += m[0];
+        i += m[0].length;
+        continue;
+      }
+    }
+    out += text[i];
+    visible += 1;
+    i += 1;
+  }
+  return `${out}…${supportsColor() ? RESET : ''}`;
 }
 
 function findLatestFiles(pattern, limit = 8) {
@@ -258,7 +321,6 @@ function readClaudeUsage() {
       return { model: last[1], input: null, output: null, total: null, context: null, cost: null };
     }
   }
-
   return null;
 }
 
@@ -391,11 +453,38 @@ function render() {
   const netOutRate = Math.max(0, (netNow.outBytes - prevNet.outBytes) / elapsed);
   prevNet = netNow;
 
-  const gpuLabel = `GPU ${gpuState.util == null ? '0%' : `${gpuState.util}%`} ${shorten(gpuState.model || '', 10)}`.trim();
-  const left = `CPU ${formatPercent(cpu)} ${sparkline(cpuHistory)}  ${gpuLabel}  MEM ${formatPercent(memUsed)}  NET IN ${formatRate(netInRate)} OUT ${formatRate(netOutRate)}`;
-  const modelLabel = `MODEL ${shorten(usageState.model || '--', 20)}`;
-  const tokenLabel = `TOK I ${usageState.input == null ? '--' : usageState.input.toLocaleString()} O ${usageState.output == null ? '--' : usageState.output.toLocaleString()} T ${usageState.total == null ? '--' : usageState.total.toLocaleString()}`;
-  const ctxCostLabel = `CTX ${usageState.context == null ? '--' : usageState.context.toLocaleString()} COST ${usageState.cost == null ? '--' : `$${usageState.cost.toFixed(4)}`}`;
+  const gpuPct = gpuState.util == null ? 0 : gpuState.util;
+  const cpuText = colorByPercent(cpu, formatPercent(cpu));
+  const gpuText = colorByPercent(gpuPct, `${gpuPct}%`);
+  const memText = colorByPercent(memUsed, formatPercent(memUsed));
+  const netInText = colorByRate(netInRate, formatRate(netInRate));
+  const netOutText = colorByRate(netOutRate, formatRate(netOutRate));
+
+  const deltaIn = Number.isFinite(usageState.input) && Number.isFinite(prevTokenSnapshot.input)
+    ? usageState.input - prevTokenSnapshot.input
+    : NaN;
+  const deltaOut = Number.isFinite(usageState.output) && Number.isFinite(prevTokenSnapshot.output)
+    ? usageState.output - prevTokenSnapshot.output
+    : NaN;
+  const deltaTotal = Number.isFinite(usageState.total) && Number.isFinite(prevTokenSnapshot.total)
+    ? usageState.total - prevTokenSnapshot.total
+    : NaN;
+
+  if (Number.isFinite(usageState.input)) prevTokenSnapshot.input = usageState.input;
+  if (Number.isFinite(usageState.output)) prevTokenSnapshot.output = usageState.output;
+  if (Number.isFinite(usageState.total)) prevTokenSnapshot.total = usageState.total;
+
+  const tokInText = usageState.input == null ? dim('--') : colorByTokenDelta(deltaIn, usageState.input.toLocaleString());
+  const tokOutText = usageState.output == null ? dim('--') : colorByTokenDelta(deltaOut, usageState.output.toLocaleString());
+  const tokTotalText = usageState.total == null ? dim('--') : colorByTokenDelta(deltaTotal, usageState.total.toLocaleString());
+  const ctxValue = usageState.context == null ? dim('--') : color(usageState.context.toLocaleString(), 176, 132, 255);
+  const costValue = usageState.cost == null ? dim('--') : colorByCost(usageState.cost, `$${usageState.cost.toFixed(4)}`);
+
+  const gpuLabel = `GPU ${gpuText} ${dim(shorten(gpuState.model || '', 10))}`.trim();
+  const left = `CPU ${cpuText} ${color(sparkline(cpuHistory), 120, 175, 255)}  ${gpuLabel}  MEM ${memText}  NET IN ${netInText} OUT ${netOutText}`;
+  const modelLabel = `MODEL ${color(shorten(usageState.model || '--', 20), 120, 175, 255)}`;
+  const tokenLabel = `TOK I ${tokInText} O ${tokOutText} T ${tokTotalText}`;
+  const ctxCostLabel = `CTX ${ctxValue} COST ${costValue}`;
   const right = `${modelLabel}  ${tokenLabel}  ${ctxCostLabel}  ${SPINNER[spin]}`;
   const line = `${left}  |  ${right}`;
 
