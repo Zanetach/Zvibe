@@ -1,6 +1,6 @@
 {
   "name": "@zanetach/zvibe",
-  "version": "2.0.15",
+  "version": "2.0.16",
   "description": "zvibe - session-first multi-agent development workspace launcher (zellij backend)",
   "scripts": {
     "verify:syntax": "bash scripts/verify-syntax.sh",
@@ -25,7 +25,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Zanetach/Zevibe.git"
+    "url": "https://github.com/Zanetach/Zvibe.git"
   },
   "bugs": {
     "url": "https://github.com/Zanetach/Zevibe/issues"
@@ -37,6 +37,7 @@
   "files": [
     "bin",
     "src",
-    "scripts"
+    "scripts",
+    "templates"
   ]
 }

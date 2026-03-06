@@ -17,6 +17,10 @@ function defaultConfig() {
   return {
     defaultAgent: 'codex',
     agentPair: ['opencode', 'codex'],
+    agentArgs: [],
+    codexArgs: [],
+    claudeArgs: [],
+    opencodeArgs: [],
     managedAgents: [],
     backend: 'zellij',
     fallback: true,
@@ -82,6 +86,43 @@ function validate(config, { strict = true } = {}) {
     validateAgent(config.agentPair[1], 'agentPair[1]');
   }
 
+  const argKeys = ['agentArgs', 'codexArgs', 'claudeArgs', 'opencodeArgs'];
+  argKeys.forEach((key) => {
+    if (config[key] === undefined) return;
+    if (!Array.isArray(config[key])) {
+      throw new ZvibeError(ERRORS.CONFIG_INVALID, `${key} 必须是字符串数组`);
+    }
+    config[key].forEach((item, idx) => {
+      if (typeof item !== 'string') {
+        throw new ZvibeError(ERRORS.CONFIG_INVALID, `${key}[${idx}] 必须是字符串`);
+      }
+    });
+  });
+
+  const dangerFlag = '--dangerously-skip-permissions';
+  const hasDangerFlag = (list) => Array.isArray(list) && list.includes(dangerFlag);
+  if (hasDangerFlag(config.agentArgs)) {
+    throw new ZvibeError(
+      ERRORS.CONFIG_INVALID,
+      `agentArgs 不允许包含 ${dangerFlag}`,
+      '该参数仅支持 claudeArgs'
+    );
+  }
+  if (hasDangerFlag(config.codexArgs)) {
+    throw new ZvibeError(
+      ERRORS.CONFIG_INVALID,
+      `codexArgs 不允许包含 ${dangerFlag}`,
+      '该参数仅支持 claudeArgs'
+    );
+  }
+  if (hasDangerFlag(config.opencodeArgs)) {
+    throw new ZvibeError(
+      ERRORS.CONFIG_INVALID,
+      `opencodeArgs 不允许包含 ${dangerFlag}`,
+      '该参数仅支持 claudeArgs'
+    );
+  }
+
   if (config.managedAgents !== undefined) {
     if (!Array.isArray(config.managedAgents)) {
       throw new ZvibeError(ERRORS.CONFIG_INVALID, 'managedAgents 必须是数组');
@@ -133,6 +174,10 @@ function loadConfig({ strict = true } = {}) {
   const normalized = {
     defaultAgent: data.defaultAgent,
     agentPair: data.agentPair || data.AgentMode || defaultConfig().agentPair,
+    agentArgs: Array.isArray(data.agentArgs) ? data.agentArgs : defaultConfig().agentArgs,
+    codexArgs: Array.isArray(data.codexArgs) ? data.codexArgs : defaultConfig().codexArgs,
+    claudeArgs: Array.isArray(data.claudeArgs) ? data.claudeArgs : defaultConfig().claudeArgs,
+    opencodeArgs: Array.isArray(data.opencodeArgs) ? data.opencodeArgs : defaultConfig().opencodeArgs,
     managedAgents: Array.isArray(data.managedAgents) ? data.managedAgents : defaultConfig().managedAgents,
     backend: normalizeBackend(data.backend),
     fallback: data.fallback !== undefined ? data.fallback : true,
@@ -157,6 +202,10 @@ function mergeWithPriority(cli, config) {
   return {
     defaultAgent: cli.defaultAgent || config.defaultAgent,
     agentPair: cli.agentPair || config.agentPair,
+    agentArgs: Array.isArray(config.agentArgs) ? config.agentArgs : [],
+    codexArgs: Array.isArray(config.codexArgs) ? config.codexArgs : [],
+    claudeArgs: Array.isArray(config.claudeArgs) ? config.claudeArgs : [],
+    opencodeArgs: Array.isArray(config.opencodeArgs) ? config.opencodeArgs : [],
     backend: normalizeBackend(cli.backend || config.backend),
     managedAgents: Array.isArray(config.managedAgents) ? config.managedAgents : [],
     fallback: cli.fallback !== undefined ? cli.fallback : config.fallback,

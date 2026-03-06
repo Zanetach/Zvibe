@@ -24,9 +24,10 @@ function preflight() {
 function shellWrap(targetDir, command) {
   const shell = process.env.SHELL || '/bin/zsh';
   const quotedDir = targetDir.replace(/'/g, `'\\''`);
-  const quotedCmd = command.replace(/'/g, `'\\''`);
+  const paneCommand = String(command || '').trim() || ':';
+  const quotedCmd = paneCommand.replace(/'/g, `'\\''`);
   const quotedShell = shell.replace(/'/g, `'\\''`);
-  return `cd '${quotedDir}' && ${quotedCmd}; exec ${quotedShell} -l`;
+  return `cd '${quotedDir}' || printf '[zvibe] warning: failed to enter %s\\n' '${quotedDir}'; ${quotedCmd}; _zvibe_code=$?; [ "$_zvibe_code" -eq 0 ] || printf '[zvibe] pane command exited: %s\\n' "$_zvibe_code"; exec ${quotedShell} -l`;
 }
 
 function escapeKdl(value) {
@@ -37,7 +38,7 @@ function paneKdl(targetDir, command, paneName, size = null) {
   const shell = process.env.SHELL || '/bin/zsh';
   const cmd = shellWrap(targetDir, command);
   const sizeAttr = size ? ` size="${escapeKdl(size)}"` : '';
-  return `pane name="${escapeKdl(paneName)}"${sizeAttr} command="${escapeKdl(shell)}" {\n        args "-lc" "${escapeKdl(cmd)}"\n      }`;
+  return `pane name="${escapeKdl(paneName)}"${sizeAttr} borderless=true command="${escapeKdl(shell)}" {\n        args "-lc" "${escapeKdl(cmd)}"\n      }`;
 }
 
 function buildLayout(targetDir, commands) {
@@ -48,7 +49,7 @@ function buildLayout(targetDir, commands) {
   const rightTop = paneKdl(targetDir, commands.rightTop, `${panePrefix}:${rightTopRole}`);
 
   if (minimalTerminal) {
-    return `layout {\n  pane split_direction="Horizontal" {\n    pane {\n      ${rightTop}\n    }\n    ${statusBar}\n  }\n}\n`;
+    return `layout {\n  pane split_direction="Horizontal" {\n    pane size="94%" {\n      ${rightTop}\n    }\n    ${statusBar}\n  }\n}\n`;
   }
 
   const leftTop = paneKdl(targetDir, commands.leftTop, `${panePrefix}:project`, '60%');
@@ -59,10 +60,10 @@ function buildLayout(targetDir, commands) {
   const rightTopSized = paneKdl(targetDir, commands.rightTop, `${panePrefix}:${rightTopRole}`, rightTopSize);
 
   if (!commands.rightBottom) {
-    return `layout {\n  pane split_direction="Horizontal" {\n    pane split_direction="Vertical" {\n      pane size="45%" split_direction="Horizontal" {\n        ${leftTop}\n        ${leftBottom}\n      }\n      pane size="55%" {\n        ${rightTopSized}\n      }\n    }\n    ${statusBar}\n  }\n}\n`;
+    return `layout {\n  pane split_direction="Horizontal" {\n    pane size="94%" split_direction="Vertical" {\n      pane size="45%" split_direction="Horizontal" {\n        ${leftTop}\n        ${leftBottom}\n      }\n      pane size="55%" {\n        ${rightTopSized}\n      }\n    }\n    ${statusBar}\n  }\n}\n`;
   }
   const rightBottom = paneKdl(targetDir, commands.rightBottom, `${panePrefix}:${rightBottomIsTerminal ? 'terminal' : 'agent'}`, rightBottomSize);
-  return `layout {\n  pane split_direction="Horizontal" {\n    pane split_direction="Vertical" {\n      pane size="45%" split_direction="Horizontal" {\n        ${leftTop}\n        ${leftBottom}\n      }\n      pane size="55%" split_direction="Horizontal" {\n        ${rightTopSized}\n        ${rightBottom}\n      }\n    }\n    ${statusBar}\n  }\n}\n`;
+  return `layout {\n  pane split_direction="Horizontal" {\n    pane size="94%" split_direction="Vertical" {\n      pane size="45%" split_direction="Horizontal" {\n        ${leftTop}\n        ${leftBottom}\n      }\n      pane size="55%" split_direction="Horizontal" {\n        ${rightTopSized}\n        ${rightBottom}\n      }\n    }\n    ${statusBar}\n  }\n}\n`;
 }
 
 function writeLayout(targetDir, commands) {
@@ -83,7 +84,14 @@ function mustRun(command, args, hint, options = {}) {
 }
 
 function applyPaneFrames() {
-  run('zellij', ['options', '--pane-frames', 'true'], { capture: true });
+  run('zellij', ['options', '--pane-frames', 'false'], { capture: true });
+  run('zellij', ['options', '--mouse-mode', 'true'], { capture: true });
+}
+
+function ensureInteractiveInputMode() {
+  // When launched from an existing locked client (eg. external agent),
+  // new tabs can inherit locked mode and appear "unclickable".
+  run('zellij', ['action', 'switch-mode', 'pane'], { capture: true });
 }
 
 function launch({ targetDir, commands, freshSession = false, sessionTag = '' }) {
@@ -102,6 +110,7 @@ function launch({ targetDir, commands, freshSession = false, sessionTag = '' }) 
       // Move focus to make the new zvibe tab immediately visible.
       run('zellij', ['action', 'go-to-next-tab'], { capture: true });
       applyPaneFrames();
+      ensureInteractiveInputMode();
       return;
     }
 
@@ -217,6 +226,7 @@ module.exports = {
   name: 'zellij',
   preflight,
   launch,
+  shellWrap,
   healthcheck,
   sessionName,
   listSessions,

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { sessionName, normalizeSessionInput, filterZvibeSessions } = require('../src/backends/zellij');
+const { sessionName, normalizeSessionInput, filterZvibeSessions, shellWrap } = require('../src/backends/zellij');
 
 test('sessionName normalizes target dir and appends session tag', () => {
   const name = sessionName('/Users/zane/Documents/Coderepo/zvibe-kits', 'codex-ab12');
@@ -33,4 +33,18 @@ test('filterZvibeSessions keeps legacy and current zvibe sessions only', () => {
     'Coderepo-codex-xy22',
     'workspace-terminal-ab12'
   ]);
+});
+
+test('shellWrap keeps pane exit hint and opens login shell', () => {
+  const wrapped = shellWrap('/tmp/demo', 'keifu');
+  assert.match(wrapped, /; keifu; _zvibe_code=\$\?/);
+  assert.match(wrapped, /pane command exited/);
+  assert.match(wrapped, /exec .* -l$/);
+});
+
+test('shellWrap keeps pane alive when cd fails and command is empty', () => {
+  const wrapped = shellWrap('/tmp/missing-dir', '');
+  assert.match(wrapped, /cd '\/tmp\/missing-dir' \|\| printf '\[zvibe\] warning: failed to enter/);
+  assert.match(wrapped, /; :; _zvibe_code=\$\?/);
+  assert.match(wrapped, /exec .* -l$/);
 });

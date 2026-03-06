@@ -28,7 +28,10 @@ function requiredPluginFiles() {
   return [
     path.join(os.homedir(), '.config', 'yazi', 'yazi.toml'),
     path.join(os.homedir(), '.config', 'yazi', 'keymap.toml'),
-    path.join(os.homedir(), '.config', 'zellij', 'layouts', 'zvibe.kdl')
+    path.join(os.homedir(), '.config', 'zellij', 'VERSION'),
+    path.join(os.homedir(), '.config', 'zellij', 'config.kdl'),
+    path.join(os.homedir(), '.config', 'zellij', 'layouts', 'zvibe.kdl'),
+    path.join(os.homedir(), '.config', 'zellij', 'themes', 'cyber.kdl')
   ];
 }
 
@@ -99,13 +102,54 @@ function withPassthrough(baseCommand, passthroughArgs) {
   return `${baseCommand} ${passthroughArgs.map(shellQuoteArg).join(' ')}`;
 }
 
-function withAgentEnv(agent, command) {
-  const codexVars = ['CODEX_CI', 'CODEX_MANAGED_BY_NPM', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CODEX_THREAD_ID'];
-  const unsetVars = ['CLAUDECODE'];
-
-  if (agent === 'claude' || agent === 'opencode') {
-    unsetVars.push(...codexVars);
+function parseArgList(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.map((item) => String(item));
+    } catch {}
   }
+  return raw.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function parseEnvVarList(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name));
+}
+
+function normalizeAgentEnvIsolation(rawMode) {
+  const mode = String(rawMode || 'smart').trim().toLowerCase();
+  if (['off', 'none', 'false', '0'].includes(mode)) return 'off';
+  if (['strict', 'hard'].includes(mode)) return 'strict';
+  return 'smart';
+}
+
+function agentUnsetVars(env = process.env) {
+  const isolation = normalizeAgentEnvIsolation(env.ZVIBE_AGENT_ENV_ISOLATION);
+  const baseVars = ['CLAUDECODE', 'CODEX_THREAD_ID'];
+  const strictVars = ['CODEX_CI', 'CODEX_MANAGED_BY_NPM', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED'];
+  const customUnset = parseEnvVarList(env.ZVIBE_AGENT_ENV_UNSET);
+  const customKeep = new Set(parseEnvVarList(env.ZVIBE_AGENT_ENV_KEEP));
+  const hasAgentContamination = strictVars.some((name) => Object.prototype.hasOwnProperty.call(env, name));
+  const effectiveIsolation = (isolation === 'smart' && hasAgentContamination) ? 'strict' : isolation;
+
+  const candidate = [];
+  if (effectiveIsolation !== 'off') {
+    candidate.push(...baseVars);
+    if (effectiveIsolation === 'strict') candidate.push(...strictVars);
+  }
+  candidate.push(...customUnset);
+
+  return Array.from(new Set(candidate.filter((name) => !customKeep.has(name))));
+}
+
+function withAgentEnv(agent, command, env = process.env) {
+  const unsetVars = agentUnsetVars(env);
 
   const envPrefix = unsetVars.length > 0
     ? `env ${unsetVars.map((name) => `-u ${name}`).join(' ')} `
@@ -117,6 +161,56 @@ function withAgentEnv(agent, command) {
 function buildAgentCommand(agent, passthroughArgs = []) {
   const base = withPassthrough(agentCommand(agent), passthroughArgs);
   return withAgentEnv(agent, base);
+}
+
+function configuredAgentArgs(config, agent) {
+  const globalArgs = Array.isArray(config.agentArgs) ? config.agentArgs : [];
+  const perAgentKey = `${agent}Args`;
+  const perAgentArgs = Array.isArray(config[perAgentKey]) ? config[perAgentKey] : [];
+  return globalArgs.concat(perAgentArgs);
+}
+
+function getClaudePermissionToggles(args = []) {
+  const list = Array.isArray(args) ? args.map((item) => String(item)) : [];
+  const skipPermissions = list.includes('--dangerously-skip-permissions');
+  let bypassPermissions = false;
+  for (let i = 0; i < list.length; i += 1) {
+    const token = list[i];
+    if (token === '--permission-mode' && list[i + 1] === 'bypassPermissions') {
+      bypassPermissions = true;
+      break;
+    }
+    if (token === '--permission-mode=bypassPermissions') {
+      bypassPermissions = true;
+      break;
+    }
+  }
+  return { bypassPermissions, skipPermissions };
+}
+
+function applyClaudePermissionToggles(args = [], toggles = {}) {
+  const list = Array.isArray(args) ? args.map((item) => String(item)) : [];
+  const next = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const token = list[i];
+    const following = list[i + 1];
+
+    if (token === '--dangerously-skip-permissions') continue;
+    if (token === '--permission-mode' && following === 'bypassPermissions') {
+      i += 1;
+      continue;
+    }
+    if (token === '--permission-mode=bypassPermissions') continue;
+    next.push(token);
+  }
+
+  if (toggles.bypassPermissions) {
+    next.push('--permission-mode', 'bypassPermissions');
+  }
+  if (toggles.skipPermissions) {
+    next.push('--dangerously-skip-permissions');
+  }
+  return next;
 }
 
 function buildStatusBarCommand({ primaryAgent = '', secondaryAgent = '', noAgent = false } = {}) {
@@ -428,6 +522,65 @@ function ensureTextFile(filePath, content, { overwrite = false } = {}) {
   return 'written';
 }
 
+function isBackupFile(filePath) {
+  const name = path.basename(filePath).toLowerCase();
+  return name.endsWith('~')
+    || name.includes('.bak')
+    || name.includes('.backup');
+}
+
+function listFilesRecursively(rootDir, { skipDirs = [] } = {}) {
+  if (!fs.existsSync(rootDir)) return [];
+  const skipSet = new Set(skipDirs.map((item) => String(item)));
+  const files = [];
+
+  function walk(currentDir) {
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    entries.forEach((entry) => {
+      if (entry.name === '.' || entry.name === '..') return;
+      if (entry.isDirectory() && skipSet.has(entry.name)) return;
+
+      const abs = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+        return;
+      }
+      if (!entry.isFile()) return;
+      files.push(path.relative(rootDir, abs));
+    });
+  }
+
+  walk(rootDir);
+  return files;
+}
+
+function backupDirectoryFiles(rootDir, output, { label = '目录', skipDirs = [] } = {}) {
+  if (!fs.existsSync(rootDir)) return 0;
+  const allFiles = listFilesRecursively(rootDir, { skipDirs });
+  const candidates = allFiles.filter((rel) => !isBackupFile(rel));
+  if (candidates.length === 0) {
+    output.info(`插件备份: ${label} 无需备份`);
+    return 0;
+  }
+
+  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+  let backedUp = 0;
+  candidates.forEach((rel) => {
+    const src = path.join(rootDir, rel);
+    let backupPath = `${src}.bak.${stamp}`;
+    let seq = 1;
+    while (fs.existsSync(backupPath)) {
+      backupPath = `${src}.bak.${stamp}.${seq}`;
+      seq += 1;
+    }
+    fs.copyFileSync(src, backupPath);
+    backedUp += 1;
+  });
+
+  output.info(`插件备份: ${label} 已备份 ${backedUp} 个文件（排除已有备份文件）`);
+  return backedUp;
+}
+
 function ensurePluginConfigs(output, { overwrite = true } = {}) {
   const yaziToml = `[mgr]
 ratio = [0, 4, 6]
@@ -453,32 +606,37 @@ prepend_keymap = [
 ]
 `;
 
-  const zellijLayout = `layout {
-  pane split_direction="Vertical" {
-    pane size="45%" split_direction="Horizontal" {
-      pane
-      pane
-    }
-    pane size="55%" split_direction="Horizontal" {
-      pane size="70%"
-      pane size="30%"
-    }
-  }
-}
-`;
-
   const yaziConfigPath = path.join(os.homedir(), '.config', 'yazi', 'yazi.toml');
   const yaziKeymapPath = path.join(os.homedir(), '.config', 'yazi', 'keymap.toml');
-  const zellijLayoutPath = path.join(os.homedir(), '.config', 'zellij', 'layouts', 'zvibe.kdl');
+  const zellijRootPath = path.join(os.homedir(), '.config', 'zellij');
+  const bundledZellijRootPath = path.join(__dirname, '..', 'templates', 'zellij');
 
   const mode = { overwrite };
   const yaziConfigResult = ensureTextFile(yaziConfigPath, yaziToml, mode);
   const yaziKeymapResult = ensureTextFile(yaziKeymapPath, yaziKeymap, mode);
-  const zellijLayoutResult = ensureTextFile(zellijLayoutPath, zellijLayout, mode);
+
+  if (overwrite) {
+    backupDirectoryFiles(zellijRootPath, output, { label: 'zellij', skipDirs: ['.git'] });
+  }
+
+  let zellijWriteCount = 0;
+  let zellijTotalCount = 0;
+  if (fs.existsSync(bundledZellijRootPath)) {
+    const bundledFiles = listFilesRecursively(bundledZellijRootPath, { skipDirs: ['.git'] })
+      .filter((rel) => !isBackupFile(rel));
+    zellijTotalCount = bundledFiles.length;
+    bundledFiles.forEach((rel) => {
+      const sourceFile = path.join(bundledZellijRootPath, rel);
+      const targetFile = path.join(zellijRootPath, rel);
+      const content = fs.readFileSync(sourceFile, 'utf8');
+      const result = ensureTextFile(targetFile, content, mode);
+      if (result === 'written') zellijWriteCount += 1;
+    });
+  }
 
   output.info(`插件配置: yazi.toml ${yaziConfigResult === 'written' ? (overwrite ? '已覆盖写入' : '已写入') : '已存在，跳过'}`);
   output.info(`插件配置: keymap.toml ${yaziKeymapResult === 'written' ? (overwrite ? '已覆盖写入' : '已写入') : '已存在，跳过'}`);
-  output.info(`插件配置: zellij layout ${zellijLayoutResult === 'written' ? (overwrite ? '已覆盖写入' : '已写入') : '已存在，跳过'}`);
+  output.info(`插件配置: zellij ${overwrite ? '覆盖写入' : '写入'} ${zellijWriteCount}/${zellijTotalCount} 个文件`);
   output.info('插件配置: keifu 使用默认配置（当前版本无需额外配置文件）');
 }
 
@@ -704,6 +862,9 @@ async function cmdSetup(flags, output) {
   let defaultAgent = current.defaultAgent;
   let pairTop = current.agentPair[0];
   let pairBottom = current.agentPair[1];
+  const currentClaudeToggles = getClaudePermissionToggles(current.claudeArgs);
+  let claudeBypassPermissions = currentClaudeToggles.bypassPermissions;
+  let claudeSkipPermissions = currentClaudeToggles.skipPermissions;
   const availableAgents = AGENTS.filter((agent) => isAgentAvailable(agent));
   const interactiveFallbacks = managedAgents.length > 0 ? managedAgents : availableAgents;
   if (interactiveFallbacks.length > 0) {
@@ -719,6 +880,8 @@ async function cmdSetup(flags, output) {
     output.info(`DefaultAgent 使用默认值: ${defaultAgent}`);
     output.info(`AgentMode 右上使用默认值: ${pairTop}`);
     output.info(`AgentMode 右下使用默认值: ${pairBottom}`);
+    output.info(`Claude 参数 - BypassPermissions: ${claudeBypassPermissions ? '开启' : '关闭'}`);
+    output.info(`Claude 参数 - SkipPermissions: ${claudeSkipPermissions ? '开启' : '关闭'}`);
   } else {
     process.stdout.write('\n[设置 1/3] Default Agent\n');
     defaultAgent = await askAgentChoice('DefaultAgent', defaultAgent, output);
@@ -728,6 +891,10 @@ async function cmdSetup(flags, output) {
 
     process.stdout.write('\n[设置 3/3] AgentMode 右下\n');
     pairBottom = await askAgentChoice('AgentMode 右下 Agent', pairBottom, output);
+
+    process.stdout.write('\n[Claude 参数开关]\n');
+    claudeBypassPermissions = await askYesNo('启用 Claude BypassPermissions（--permission-mode bypassPermissions）？', claudeBypassPermissions);
+    claudeSkipPermissions = await askYesNo('启用 Claude SkipPermissions（--dangerously-skip-permissions）？', claudeSkipPermissions);
   }
 
   if (!AGENTS.includes(defaultAgent)) {
@@ -744,6 +911,10 @@ async function cmdSetup(flags, output) {
     ...current,
     defaultAgent,
     agentPair: flags.agentPair && flags.agentPair.length === 2 ? flags.agentPair : [pairTop, pairBottom],
+    claudeArgs: applyClaudePermissionToggles(current.claudeArgs, {
+      bypassPermissions: claudeBypassPermissions,
+      skipPermissions: claudeSkipPermissions
+    }),
     managedAgents: normalizeManagedAgents(managedAgents),
     backend: normalizeBackend(flags.backend || current.backend),
     rightTerminal: flags.rightTerminal !== undefined ? flags.rightTerminal : current.rightTerminal,
@@ -755,6 +926,8 @@ async function cmdSetup(flags, output) {
     process.stdout.write('\n配置摘要：\n');
     process.stdout.write(`- defaultAgent: ${cfg.defaultAgent}\n`);
     process.stdout.write(`- AgentMode: [${cfg.agentPair[0]}, ${cfg.agentPair[1]}]\n`);
+    process.stdout.write(`- Claude BypassPermissions: ${claudeBypassPermissions ? '开启' : '关闭'}\n`);
+    process.stdout.write(`- Claude SkipPermissions: ${claudeSkipPermissions ? '开启' : '关闭'}\n`);
     process.stdout.write(`- managedAgents: [${cfg.managedAgents.join(', ')}]\n`);
     process.stdout.write(`- backend: ${cfg.backend}\n`);
   }
@@ -777,6 +950,7 @@ function configGet(config, key) {
 function castConfigValue(key, value) {
   if (key === 'fallback' || key === 'autoGitInit' || key === 'rightTerminal') return value === 'true';
   if (key === 'agentPair') return value.split(',').map((v) => v.trim());
+  if (key === 'agentArgs' || key === 'codexArgs' || key === 'claudeArgs' || key === 'opencodeArgs') return parseArgList(value);
   if (key === 'backend') return normalizeBackend(value);
   return value;
 }
@@ -815,7 +989,7 @@ async function cmdConfig(positional, output) {
   }
 
   if (sub === 'explain') {
-    const text = `当前行为:\n- 默认 agent: ${config.defaultAgent}\n- 双 agent: ${config.agentPair.join(' + ')}\n- 后端策略: ${config.backend}\n- 右侧 Terminal: ${config.rightTerminal ? '开启' : '关闭'}`;
+    const text = `当前行为:\n- 默认 agent: ${config.defaultAgent}\n- 双 agent: ${config.agentPair.join(' + ')}\n- 后端策略: ${config.backend}\n- 右侧 Terminal: ${config.rightTerminal ? '开启' : '关闭'}\n- agentArgs(全局): ${(config.agentArgs || []).join(' ') || '(空)'}\n- codexArgs: ${(config.codexArgs || []).join(' ') || '(空)'}\n- claudeArgs: ${(config.claudeArgs || []).join(' ') || '(空)'}\n- opencodeArgs: ${(config.opencodeArgs || []).join(' ') || '(空)'}`;
     if (output.json) commandSummary({ ok: true, command: 'config explain', config, explain: text }, output);
     else process.stdout.write(`${text}\n`);
     return;
@@ -836,11 +1010,26 @@ async function cmdConfig(positional, output) {
 
   if (!output.json) process.stdout.write('\n[设置 3/3] AgentMode 右下\n');
   const pairBottom = await askAgentChoice('AgentMode 右下 Agent', config.agentPair[1], output);
+  const currentClaudeToggles = getClaudePermissionToggles(config.claudeArgs);
+  let claudeBypassPermissions = currentClaudeToggles.bypassPermissions;
+  let claudeSkipPermissions = currentClaudeToggles.skipPermissions;
+  if (!output.json) process.stdout.write('\n[Claude 参数开关]\n');
+  if (process.stdin.isTTY) {
+    claudeBypassPermissions = await askYesNo('启用 Claude BypassPermissions（--permission-mode bypassPermissions）？', claudeBypassPermissions);
+    claudeSkipPermissions = await askYesNo('启用 Claude SkipPermissions（--dangerously-skip-permissions）？', claudeSkipPermissions);
+  } else if (!output.json) {
+    output.info(`非交互模式，保持 Claude BypassPermissions: ${claudeBypassPermissions ? '开启' : '关闭'}`);
+    output.info(`非交互模式，保持 Claude SkipPermissions: ${claudeSkipPermissions ? '开启' : '关闭'}`);
+  }
 
   const next = {
     ...config,
     defaultAgent: defaultAgent || config.defaultAgent,
     agentPair: [pairTop || config.agentPair[0], pairBottom || config.agentPair[1]],
+    claudeArgs: applyClaudePermissionToggles(config.claudeArgs, {
+      bypassPermissions: claudeBypassPermissions,
+      skipPermissions: claudeSkipPermissions
+    }),
     backend: 'zellij',
     rightTerminal: config.rightTerminal,
     initialized: true
@@ -852,6 +1041,8 @@ async function cmdConfig(positional, output) {
     process.stdout.write('\n配置摘要：\n');
     process.stdout.write(`- defaultAgent: ${next.defaultAgent}\n`);
     process.stdout.write(`- AgentMode: [${next.agentPair[0]}, ${next.agentPair[1]}]\n`);
+    process.stdout.write(`- Claude BypassPermissions: ${claudeBypassPermissions ? '开启' : '关闭'}\n`);
+    process.stdout.write(`- Claude SkipPermissions: ${claudeSkipPermissions ? '开启' : '关闭'}\n`);
   }
   output.ok(`配置已保存到 ${file}`);
   commandSummary({ ok: true, command: 'config wizard', file }, output);
@@ -1207,10 +1398,12 @@ function cmdRun(positional, flags, output) {
     .concat(flags.passthroughArgs || [])
     .concat(parsed.agentArgs || [])
     .concat(flags.doubleDashArgs || []);
+  const primaryConfiguredArgs = codeMode ? configuredAgentArgs(config, config.agentPair[0]) : configuredAgentArgs(config, mode);
+  const secondaryConfiguredArgs = codeMode ? configuredAgentArgs(config, config.agentPair[1]) : [];
   const primaryAgent = terminalOnly
     ? 'true'
-    : (codeMode ? buildAgentCommand(config.agentPair[0]) : buildAgentCommand(mode, passthroughArgs));
-  const secondaryAgent = codeMode ? buildAgentCommand(config.agentPair[1]) : '';
+    : (codeMode ? buildAgentCommand(config.agentPair[0], primaryConfiguredArgs) : buildAgentCommand(mode, primaryConfiguredArgs.concat(passthroughArgs)));
+  const secondaryAgent = codeMode ? buildAgentCommand(config.agentPair[1], secondaryConfiguredArgs) : '';
   const commands = {
     leftTop: terminalOnly ? '' : 'yazi',
     leftBottom: terminalOnly ? '' : 'keifu',
@@ -1298,5 +1491,11 @@ module.exports = {
   main,
   ensureClaude,
   isClaudeAvailable,
-  getClaudeUpgradeInvocations
+  getClaudeUpgradeInvocations,
+  withAgentEnv,
+  agentUnsetVars,
+  configuredAgentArgs,
+  parseArgList,
+  getClaudePermissionToggles,
+  applyClaudePermissionToggles
 };

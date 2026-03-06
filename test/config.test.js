@@ -35,6 +35,57 @@ test('validate rejects invalid agent pair in strict mode', () => {
   });
 });
 
+test('validate accepts agent args arrays', () => {
+  const cfg = {
+    ...defaultConfig(),
+    defaultAgent: 'codex',
+    agentPair: ['codex', 'claude'],
+    agentArgs: ['--foo'],
+    codexArgs: ['--model', 'gpt-5'],
+    initialized: true
+  };
+  assert.equal(validate(cfg, { strict: true }), true);
+});
+
+test('validate allows dangerously-skip-permissions in claudeArgs only', () => {
+  const cfg = {
+    ...defaultConfig(),
+    defaultAgent: 'codex',
+    agentPair: ['codex', 'claude'],
+    claudeArgs: ['--dangerously-skip-permissions'],
+    initialized: true
+  };
+  assert.equal(validate(cfg, { strict: true }), true);
+});
+
+test('validate rejects dangerously-skip-permissions in codexArgs', () => {
+  const cfg = {
+    ...defaultConfig(),
+    defaultAgent: 'codex',
+    agentPair: ['codex', 'claude'],
+    codexArgs: ['--dangerously-skip-permissions'],
+    initialized: true
+  };
+  assert.throws(() => validate(cfg, { strict: true }), (error) => {
+    assert.equal(error instanceof ZvibeError, true);
+    assert.equal(error.code, ERRORS.CONFIG_INVALID);
+    return true;
+  });
+});
+
+test('validate rejects non-array agent args', () => {
+  const cfg = {
+    ...defaultConfig(),
+    codexArgs: '--dangerously-skip-permissions',
+    initialized: true
+  };
+  assert.throws(() => validate(cfg, { strict: true }), (error) => {
+    assert.equal(error instanceof ZvibeError, true);
+    assert.equal(error.code, ERRORS.CONFIG_INVALID);
+    return true;
+  });
+});
+
 test('mergeWithPriority keeps CLI overrides and config defaults', () => {
   const merged = mergeWithPriority(
     { defaultAgent: 'claude', rightTerminal: true },
@@ -42,12 +93,14 @@ test('mergeWithPriority keeps CLI overrides and config defaults', () => {
       ...defaultConfig(),
       defaultAgent: 'codex',
       agentPair: ['codex', 'opencode'],
+      codexArgs: ['--dangerously-skip-permissions'],
       backend: 'zellij',
       initialized: true
     }
   );
   assert.equal(merged.defaultAgent, 'claude');
   assert.deepEqual(merged.agentPair, ['codex', 'opencode']);
+  assert.deepEqual(merged.codexArgs, ['--dangerously-skip-permissions']);
   assert.equal(merged.rightTerminal, true);
   assert.equal(merged.initialized, true);
 });

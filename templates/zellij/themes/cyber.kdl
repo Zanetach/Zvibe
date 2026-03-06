@@ -1,0 +1,20 @@
+themes {
+  cyber {
+    // 基础前景背景（必须）
+    fg "#e4e4e4"
+    bg "#0f1117"
+
+    // 必须的 8 个颜色（一个都不能少）
+    black   "#0f1117"
+    red     "#ff5f87"
+    green   "#5fff87"
+    yellow  "#ffd75f"
+    blue    "#5fafff"
+    magenta "#d787ff"
+    cyan    "#5fffff"
+    white   "#e4e4e4"
+
+    // 可选扩展色（不写也行）
+    orange  "#ffb86c"
+  }
+}
