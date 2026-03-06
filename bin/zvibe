@@ -7,4 +7,7 @@ const scriptPath = fs.realpathSync(__filename);
 const rootDir = path.resolve(path.dirname(scriptPath), '..');
 const cliPath = path.join(rootDir, 'src', 'cli.js');
 
-require(cliPath);
+const cli = require(cliPath);
+if (cli && typeof cli.main === 'function') {
+  cli.main();
+}

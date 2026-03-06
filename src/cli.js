@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 const { Output } = require('./core/io');
-const { run, commandExists, commandExistsMany } = require('./core/process');
+const { run, commandExists, commandExistsMany, clearCommandExistsCache } = require('./core/process');
 const { ZvibeError, ERRORS } = require('./core/errors');
 const { AGENTS, MODES } = require('./core/constants');
 const { loadConfig, saveConfig, defaultConfig, mergeWithPriority, validate, normalizeBackend } = require('./core/config');
@@ -389,6 +389,10 @@ function brewTap(tap) {
   run('brew', ['tap', tap], { capture: true });
 }
 
+function runShell(command, options = {}) {
+  return run('sh', ['-lc', command], options);
+}
+
 function brewUpgradeFormula(formula, output, { required = false } = {}) {
   const result = run('brew', ['upgrade', formula], { capture: true });
   if (!result.ok) {
@@ -558,8 +562,29 @@ function ensureClaude(output, { install = false } = {}) {
     return true;
   }
   if (!install) return false;
-  ensureCask('/Applications/Claude Code.app', 'claude-code', output, { install: true });
+
+  output.warn('缺少 claude，尝试通过官方安装脚本安装');
+  const result = runShell('curl -fsSL https://claude.ai/install.sh | bash');
+  clearCommandExistsCache();
+  if (!result.ok || !isClaudeAvailable()) {
+    throw new ZvibeError(
+      ERRORS.COMMAND_MISSING,
+      'claude 安装失败',
+      '请手动执行 curl -fsSL https://claude.ai/install.sh | bash'
+    );
+  }
+
+  output.ok('claude 安装完成');
   return true;
+}
+
+function getClaudeUpgradeInvocations(commandAvailability = null) {
+  return [
+    ['claude', 'update'],
+    ['claude', 'upgrade'],
+    ['claude-code', 'update'],
+    ['claude-code', 'upgrade']
+  ].filter(([command]) => hasCommand(command, commandAvailability));
 }
 
 function ensureOpencode(output, { install = false } = {}) {
@@ -945,12 +970,31 @@ function cmdUpdate(output) {
   }
 
   if (managedAgents.includes('claude')) {
-    if (fs.existsSync('/Applications/Claude Code.app')) {
-      brewUpgradeCask('claude-code', output);
-    } else if (commandExists('claude') || commandExists('claude-code')) {
-      output.info('检测到 claude CLI，但非 cask 管理；已跳过 cask 升级');
-    } else {
+    if (!isClaudeAvailable()) {
       output.info('跳过 claude 升级（已管理但未安装）');
+    } else {
+      const invocations = getClaudeUpgradeInvocations();
+
+      let upgraded = false;
+      let lastDetail = '';
+      for (const [command, subcommand] of invocations) {
+        const result = run(command, [subcommand], { capture: true });
+        if (result.ok) {
+          output.ok(`claude 升级完成（${command} ${subcommand}）`);
+          upgraded = true;
+          clearCommandExistsCache();
+          break;
+        }
+        lastDetail = (result.stderr || result.stdout || result.error || '').trim();
+      }
+
+      if (!upgraded) {
+        throw new ZvibeError(
+          ERRORS.RUN_FAILED,
+          'claude 升级失败',
+          lastDetail || '请手动执行 claude update 或 claude upgrade'
+        );
+      }
     }
   } else {
     output.info('跳过 claude 升级（未纳入 managedAgents）');
@@ -1246,4 +1290,13 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  main,
+  ensureClaude,
+  isClaudeAvailable,
+  getClaudeUpgradeInvocations
+};

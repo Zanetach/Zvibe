@@ -74,6 +74,7 @@ zvibe setup --yes
 `setup` is a 3-phase flow:
 - Phase 1: plugin/dependency auto-install (brew/formula/cask + plugin configs)
 - Phase 2: interactive, ordered per-agent confirmation/install (`codex` -> `claude` -> `opencode`)
+  - `claude` is installed via the official installer: `curl -fsSL https://claude.ai/install.sh | bash`
 - Phase 3: config wizard (`DefaultAgent`, `AgentMode` layout, etc.)
 
 ### Config / 配置
@@ -204,6 +205,7 @@ npm pack
 - brew update/upgrade/cleanup
 - update installed formulas/casks/plugins only (no auto-install in update)
 - update only agents you selected in `managedAgents`
+- `claude` upgrade tries `claude update`, then falls back to `claude upgrade` for compatibility
 - plugin config regeneration
 - missing-item validation (report only)
 

@@ -48,10 +48,10 @@ function buildLayout(targetDir, commands) {
   const rightTop = paneKdl(targetDir, commands.rightTop, `${panePrefix}:${rightTopRole}`);
 
   if (minimalTerminal) {
-    return `layout {\n  pane split_direction="Horizontal" {\n    pane size="94%" {\n      ${rightTop}\n    }\n    ${statusBar}\n  }\n}\n`;
+    return `layout {\n  pane split_direction="Horizontal" {\n    pane {\n      ${rightTop}\n    }\n    ${statusBar}\n  }\n}\n`;
   }
 
-  const leftTop = paneKdl(targetDir, commands.leftTop, `${panePrefix}:file`, '60%');
+  const leftTop = paneKdl(targetDir, commands.leftTop, `${panePrefix}:project`, '60%');
   const leftBottom = paneKdl(targetDir, commands.leftBottom, `${panePrefix}:commit`, '40%');
   const rightBottomIsTerminal = commands.rightBottom === 'true';
   const rightTopSize = rightBottomIsTerminal ? '70%' : '50%';
@@ -59,10 +59,10 @@ function buildLayout(targetDir, commands) {
   const rightTopSized = paneKdl(targetDir, commands.rightTop, `${panePrefix}:${rightTopRole}`, rightTopSize);
 
   if (!commands.rightBottom) {
-    return `layout {\n  pane split_direction="Horizontal" {\n    pane size="94%" split_direction="Vertical" {\n      pane size="45%" split_direction="Horizontal" {\n        ${leftTop}\n        ${leftBottom}\n      }\n      pane size="55%" {\n        ${rightTopSized}\n      }\n    }\n    ${statusBar}\n  }\n}\n`;
+    return `layout {\n  pane split_direction="Horizontal" {\n    pane split_direction="Vertical" {\n      pane size="45%" split_direction="Horizontal" {\n        ${leftTop}\n        ${leftBottom}\n      }\n      pane size="55%" {\n        ${rightTopSized}\n      }\n    }\n    ${statusBar}\n  }\n}\n`;
   }
   const rightBottom = paneKdl(targetDir, commands.rightBottom, `${panePrefix}:${rightBottomIsTerminal ? 'terminal' : 'agent'}`, rightBottomSize);
-  return `layout {\n  pane split_direction="Horizontal" {\n    pane size="94%" split_direction="Vertical" {\n      pane size="45%" split_direction="Horizontal" {\n        ${leftTop}\n        ${leftBottom}\n      }\n      pane size="55%" split_direction="Horizontal" {\n        ${rightTopSized}\n        ${rightBottom}\n      }\n    }\n    ${statusBar}\n  }\n}\n`;
+  return `layout {\n  pane split_direction="Horizontal" {\n    pane split_direction="Vertical" {\n      pane size="45%" split_direction="Horizontal" {\n        ${leftTop}\n        ${leftBottom}\n      }\n      pane size="55%" split_direction="Horizontal" {\n        ${rightTopSized}\n        ${rightBottom}\n      }\n    }\n    ${statusBar}\n  }\n}\n`;
 }
 
 function writeLayout(targetDir, commands) {
