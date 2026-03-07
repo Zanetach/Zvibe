@@ -1085,7 +1085,7 @@ async function cmdConfig(positional, output) {
   }
 
   if (sub === 'explain') {
-    const text = `当前行为:\n- 默认 agent: ${config.defaultAgent}\n- 双 agent: ${config.agentPair.join(' + ')}\n- 后端策略: ${config.backend}\n- 右侧 Terminal: ${config.rightTerminal ? '开启' : '关闭'}\n- agentArgs(全局): ${(config.agentArgs || []).join(' ') || '(空)'}\n- codexArgs: ${(config.codexArgs || []).join(' ') || '(空)'}\n- claudeArgs: ${(config.claudeArgs || []).join(' ') || '(空)'}\n- opencodeArgs: ${(config.opencodeArgs || []).join(' ') || '(空)'}`;
+    const text = `当前行为:\n- 默认 agent: ${config.defaultAgent}\n- 双 agent: ${config.agentPair.join(' + ')}\n- 后端策略: ${config.backend}\n- 右侧 Terminal: ${config.rightTerminal ? '开启' : '关闭'}\n- Commit 面板常驻: 开启\n- agentArgs(全局): ${(config.agentArgs || []).join(' ') || '(空)'}\n- codexArgs: ${(config.codexArgs || []).join(' ') || '(空)'}\n- claudeArgs: ${(config.claudeArgs || []).join(' ') || '(空)'}\n- opencodeArgs: ${(config.opencodeArgs || []).join(' ') || '(空)'}`;
     if (output.json) commandSummary({ ok: true, command: 'config explain', config, explain: text }, output);
     else process.stdout.write(`${text}\n`);
     return;
@@ -1520,6 +1520,11 @@ function modeLabel(mode) {
   return 'agent';
 }
 
+function buildCommitPaneCommand() {
+  // Keep commit pane alive even when keifu exits (eg. Esc).
+  return 'while true; do keifu; _zvibe_keifu_code=$?; [ "$_zvibe_keifu_code" -eq 0 ] || printf "[zvibe] keifu exited: %s\\n" "$_zvibe_keifu_code"; sleep 0.1; done';
+}
+
 function buildSessionTag({ targetDir, mode, codeMode, agentPair }) {
   const seed = codeMode
     ? `${targetDir}|${mode}|${agentPair[0]}|${agentPair[1]}`
@@ -1566,7 +1571,7 @@ function cmdRun(positional, flags, output) {
   const secondaryAgent = codeMode ? buildAgentCommand(config.agentPair[1], secondaryConfiguredArgs) : '';
   const commands = {
     leftTop: terminalOnly ? '' : 'yazi',
-    leftBottom: terminalOnly ? '' : 'keifu',
+    leftBottom: terminalOnly ? '' : buildCommitPaneCommand(),
     rightTop: primaryAgent,
     rightTopRole: terminalOnly ? 'terminal' : 'agent',
     rightBottom: terminalOnly ? '' : (codeMode ? secondaryAgent : (config.rightTerminal ? 'true' : '')),
@@ -1669,6 +1674,7 @@ module.exports = {
   parseArgv,
   shouldTreatFirstPositionalAsRunTarget,
   detectViewport,
+  buildCommitPaneCommand,
   getCodexModeToggles,
   applyCodexModeToggles,
   getClaudePermissionToggles,
